@@ -8,7 +8,7 @@ change to record shape or required procedure is a major bump.
 ### Planned
 
 - **Networked server** (design in [`docs/networked-server.md`](docs/networked-server.md),
-  target 0.3.0) — one `ahp-mcp --serve` on a hub machine over MCP's HTTP
+  target 0.4.0) — one `ahp-mcp --serve` on a hub machine over MCP's HTTP
   transport, so agents on several devices share one worklog per project with the
   single-writer invariant intact. Transport-agnostic: a config file sets the
   listen address (loopback / LAN / tunnel / unix socket) and pluggable auth; the
@@ -17,9 +17,11 @@ change to record shape or required procedure is a major bump.
   `project`) as tool params and the hub's response names the exact command to
   run for anything missing, so no local proxy and no doc round-trip.
 
-## [0.2.0] — 2026-08-27
+## [0.3.0] — 2026-08-28
 
-The protocol becomes storage-location-agnostic and ships a real CLI.
+First stable release. The protocol is storage-location-agnostic; the reference
+implementation is a real CLI plus an MCP server, a one-command installer, a
+cross-project dashboard, and zero-config worker attribution. Node ≥ 20.
 
 ### Added
 
@@ -70,6 +72,8 @@ The protocol becomes storage-location-agnostic and ships a real CLI.
 - `--gate` is required on `start` and `end` (was optional).
 - Record field for a starting/ending state uses `commit` (was `sha` in drafts).
 - `tools/verify-worklog.mjs` now shares `src/validate.mjs` with the CLI.
+- **Node ≥ 20** — `bin/ahp` / `bin/ahp-mcp` are extensionless ESM entry points,
+  which Node < 20 cannot load under `"type":"module"`. Node 18 is end-of-life.
 
 ### Fixed
 

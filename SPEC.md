@@ -1,6 +1,6 @@
 # Agent Handoff Protocol (AHP)
 
-**Version:** 0.2.0 · **Status:** draft · **License:** MIT
+**Version:** 0.3.0 · **Status:** stable · **License:** MIT
 
 The machine contract is [`schema/worklog.schema.json`](./schema/worklog.schema.json).
 This document is normative; the JSON Schema, the reference `ahp` CLI and

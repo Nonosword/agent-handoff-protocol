@@ -4,7 +4,7 @@
 
 [![ci](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![spec: 0.2.0](https://img.shields.io/badge/spec-0.2.0%20draft-orange.svg)](./SPEC.md)
+[![spec: 0.3.0](https://img.shields.io/badge/spec-0.3.0-brightgreen.svg)](./SPEC.md)
 
 > An append-only worklog so rotated coding agents don't lose the thread when one
 > hits its usage limit and the next takes over. Kept in a store **outside** your
@@ -95,6 +95,15 @@ ahp end     --reason limit --summary "1 of 3 commits landed" --gate pass --evide
 The first `ahp` command in a repo auto-registers it. `ahp` fills in `seq`, the
 timestamp, the base commit and tree state from Git — you supply the meaning.
 
+From **anywhere** — every project at a glance:
+
+```sh
+ahp dashboard       # baton holder + plan, worklog state, open intents, verify,
+                    # git HEAD/tree, and a drift check (commits with no promote)
+ahp dashboard -w    # live view — refreshes on the alternate screen, ctrl-c to exit
+ahp dashboard --json
+```
+
 ## Records
 
 Four types. Full field tables in [`SPEC.md`](./SPEC.md) §5; machine contract in
@@ -115,6 +124,7 @@ mid-session cutoff.
 | Path | |
 | --- | --- |
 | [`SPEC.md`](./SPEC.md) | the normative protocol |
+| [`install.sh`](./install.sh) | one-command deploy (`--mode cli\|mcp`, `--dry-run`, `--uninstall`) |
 | [`bin/ahp`](./bin/ahp), [`src/`](./src/) | the reference CLI |
 | [`bin/ahp-mcp`](./bin/ahp-mcp) | the MCP server |
 | [`schema/worklog.schema.json`](./schema/worklog.schema.json) | JSON Schema for one record |
@@ -135,7 +145,7 @@ mid-session cutoff.
 
 ## Status
 
-Draft, `0.2.0`. Record fields may still change before `1.0`. Follows SemVer;
+`0.3.0` — first stable release. Record fields may still change before `1.0`. Follows SemVer;
 breaking changes are a major bump and land in [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Origin

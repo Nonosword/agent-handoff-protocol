@@ -1,6 +1,6 @@
 # Networked server — design (planned, not yet implemented)
 
-**Status:** design · **Target:** 0.3.0
+**Status:** design · **Target:** 0.4.0
 
 Today `ahp-mcp` is stdio-only: the MCP host spawns it as a local subprocess, and
 the worklog store lives on that same machine. Two machines working the same

@@ -4,7 +4,7 @@
 
 [![ci](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![spec: 0.2.0](https://img.shields.io/badge/spec-0.2.0%20draft-orange.svg)](./SPEC.md)
+[![spec: 0.3.0](https://img.shields.io/badge/spec-0.3.0-brightgreen.svg)](./SPEC.md)
 
 > 一份只追加的 worklog，让轮换工作的编码 agent 在某一个用量耗尽、下一个接手时不丢上下文。
 > worklog 存在项目**之外**的一个 store 里——你的仓库不会被碰。
@@ -86,6 +86,15 @@ ahp end     --reason limit --summary "3 个提交里落地了 1 个" --gate pass
 仓库里第一条 `ahp` 命令会自动注册它。`ahp` 从 Git 自动填 `seq`、时间戳、base 提交、
 工作区状态——你只提供含义。
 
+在**任意目录**——一览所有项目：
+
+```sh
+ahp dashboard       # 谁持棒 + 计划、worklog 状态、未完成 intent、verify、
+                    # git HEAD/tree,以及漂移检测(提交了但没 promote)
+ahp dashboard -w    # 实时视图——alternate screen 刷新,ctrl-c 退出
+ahp dashboard --json
+```
+
 ## 记录类型
 
 四种。完整字段表见 [`SPEC.md`](./SPEC.md) §5；机器契约见
@@ -122,7 +131,7 @@ ahp end     --reason limit --summary "3 个提交里落地了 1 个" --gate pass
 
 ## 状态
 
-草案，`0.2.0`。`1.0` 之前记录字段仍可能变动。遵循 SemVer；破坏性变更为 major，记入
+`0.3.0` —— 首个稳定版。`1.0` 之前记录字段仍可能变动。遵循 SemVer；破坏性变更为 major，记入
 [`CHANGELOG.md`](./CHANGELOG.md)。
 
 ## 由来
