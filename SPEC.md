@@ -1,11 +1,12 @@
 # Agent Handoff Protocol (AHP)
 
-**Version:** 0.1.0 · **Status:** draft · **License:** MIT
+**Version:** 0.2.0 · **Status:** draft · **License:** MIT
 
 The machine contract is [`schema/worklog.schema.json`](./schema/worklog.schema.json).
-This document is normative; the JSON Schema and
+This document is normative; the JSON Schema, the reference `ahp` CLI and
 [`tools/verify-worklog.mjs`](./tools/verify-worklog.mjs) are conformance aids, not
-the authority.
+the authority. Where the procedures below name an `ahp` command, that is the
+reference implementation of the step, not a requirement to use it.
 
 ## 1. Abstract
 
@@ -65,22 +66,50 @@ Rotated agents lose continuity in three ways this protocol addresses:
 A worklog MUST NOT restate what `git log` already carries. Its job is the column
 VCS cannot express.
 
-### 4.2 The worklog file
+### 4.2 The worklog
 
-- **Location:** `.coworker/worklog.jsonl` at the repository root by default.
-  Implementations MAY make the path configurable; the default SHOULD be honored so
-  a new worker knows where to look.
-- **Not VCS-tracked.** The repository's ignore file MUST exclude the worklog
-  directory. It is process state, not product.
-- **Format:** [JSON Lines](https://jsonlines.org/) — one JSON object per line,
-  UTF-8, LF-terminated. No comments, no trailing commas.
+A single [JSON Lines](https://jsonlines.org/) stream per project. Its properties,
+regardless of where it is stored:
+
+- **Format.** One JSON object per line, UTF-8, LF-terminated. No comments, no
+  trailing commas.
+- **Not VCS-tracked.** It is process state, not product, and MUST NOT be
+  committed to the project repository.
 - **Append-only.** Existing lines MUST NOT be edited, reordered or deleted.
   Corrections are new records.
 - **Single active writer.** At most one worker holds the baton, so appends are
-  race-free. A worker that detects a second active worker (see §8) MUST stop.
+  race-free. A worker that detects a second active writer (see §8) MUST stop.
 - **Ordered by `seq`.** A strictly increasing integer, starting at 1. Ordering
   MUST derive from `seq`, never from `at`, because clocks differ across machines
   and runtimes.
+
+### 4.3 Storage bindings
+
+The records and procedures are identical under either binding:
+
+- **In-repo.** `.coworker/worklog.jsonl` at the repository root, with
+  `.coworker/` in the project's ignore file. Simple; co-located with the code.
+- **External store.** A per-user store outside every project, one file per
+  project, keyed by the project's identity (§4.4). The project repository is not
+  touched at all. This is what the reference `ahp` implementation uses by
+  default, at `$XDG_DATA_HOME/agent-handoff/` (falling back to
+  `~/.local/share/agent-handoff/`).
+
+A worker does not need to know which binding is in effect; it asks the
+implementation for "this project's worklog".
+
+### 4.4 Project identity
+
+For the external-store binding, a project's key MUST be stable across working
+directories and, where possible, across re-clones. Derive it from VCS:
+
+- if an `origin` remote is configured — a slug of the **normalized remote URL**
+  (`git@github.com:User/Repo.git` and `https://github.com/User/Repo` both reduce
+  to `github.com/user/repo`);
+- otherwise — the repository's top-level path plus a short hash of it.
+
+The implementation SHOULD keep a registry recording each project's name, remote
+and every local path it has been seen at, so a moved checkout still resolves.
 
 ## 5. Records
 
@@ -186,7 +215,7 @@ open, no promote  =  unfinished or uncommitted work
 A worker MUST, before making any change:
 
 1. Read the worklog. Find the last `handoff.start` and its `base.commit`; note the
-   highest `seq`.
+   highest `seq`.  *(`ahp pickup` does steps 1–4.)*
 2. List the VCS history from `base.commit` to HEAD.
 3. Reconcile: every commit since `base.commit` SHOULD correspond to an
    `intent.promote`; every `intent.promote` SHOULD name a commit reachable from
@@ -197,13 +226,16 @@ A worker MUST, before making any change:
 5. **Verify the baton independently.** Confirm the working tree state and run the
    gate. Record what was observed, not what a prior record claimed.
 6. Append a `handoff.start` with the verified `base` and a `plan`.
+   *(`ahp start --plan … --gate …` — `base.commit`, tree state and `seq` are
+   filled in from Git and the log.)*
 
 ### 7.2 Working
 
 7. Split the task into small, single-intent commits. Append `intent.open` before
-   each.
+   each. *(`ahp intent open --id … --title … --intended …`)*
 8. After each commit passes the gate, append `intent.promote` with `commits`,
    `actual`, `landmines`, `next`.
+   *(`ahp intent promote --id … --commit … --gate … --actual …`)*
 9. Do not cross a commit boundary leaving a dirty tree that no open intent
    describes.
 
@@ -211,6 +243,7 @@ A worker MUST, before making any change:
 
 10. Move to the nearest gate-passing commit. Promote every completed intent.
     Append `handoff.end`. If cut off before this, §7.1 still recovers the state.
+    *(`ahp end --reason … --summary … --gate …`)*
 
 ## 8. Recovery
 
@@ -226,7 +259,7 @@ A worker MUST, before making any change:
 
 ## 9. Retention
 
-The worklog grows without bound. To compact:
+The worklog grows without bound. To compact (`ahp compact --keep N`):
 
 - Move a contiguous span of the oldest lines to
   `.coworker/worklog.archive/<firstSeq>-<lastSeq>.jsonl` (also not VCS-tracked).
@@ -263,6 +296,9 @@ identifier the VCS uses.
   (`promote` requires a prior `open`; no double promote; `fail` requires
   `landmines`) and reports un-promoted intents. It is not required to consult the
   VCS.
+
+The `ahp` CLI in this repository is the reference producer and consumer;
+`ahp verify` and `tools/verify-worklog.mjs` are reference validators.
 
 ## 13. Non-goals
 

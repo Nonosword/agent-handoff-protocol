@@ -7,15 +7,16 @@
 ## Type
 
 - [ ] docs / examples / integration / tooling (low bar)
-- [ ] change to `SPEC.md` §4–§7 or `schema/worklog.schema.json` (needs a prior issue; see below)
+- [ ] change to `SPEC.md` §4–§9 or `schema/worklog.schema.json` (needs a prior issue)
 
 ## If this changes the protocol
 
-- [ ] `SPEC.md`, `schema/worklog.schema.json`, `tools/verify-worklog.mjs` and `examples/` updated together
+- [ ] `SPEC.md`, `schema/`, `src/validate.mjs`, `tools/verify-worklog.mjs`, `examples/` updated together
 - [ ] migration story for existing worklogs stated below
 - [ ] version bumped per SemVer, `CHANGELOG.md` updated
 
 ## Checks
 
-- [ ] `for f in examples/*.jsonl; do node tools/verify-worklog.mjs --file "$f"; done` passes
-- [ ] `cd tools && npm test` passes
+- [ ] `npm test` passes
+- [ ] `npm run verify:examples` passes
+- [ ] `./install.sh --mode skill --dry-run` runs clean

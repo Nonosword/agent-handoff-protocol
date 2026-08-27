@@ -1,45 +1,32 @@
-# verify-worklog
+# tools/
 
-Zero-dependency reference validator for an [AHP](../SPEC.md) worklog.
+Helpers that are not the main `ahp` CLI.
+
+## verify-worklog.mjs
+
+Validate an AHP worklog **file** directly (structural + lifecycle). For
+project-aware validation use `ahp verify`; use this standalone form in CI, a
+hook, or against an archived span.
 
 ```
-node verify-worklog.mjs [--file <path>] [--root <dir>] [--strict] [--quiet]
+node tools/verify-worklog.mjs --file <path> [--strict] [--quiet]
 ```
 
-| Flag | Meaning |
-| --- | --- |
-| `--file <path>` | worklog path (default `<root>/.coworker/worklog.jsonl`; env `AHP_WORKLOG` also works) |
-| `--root <dir>` | repository root (default: current directory) |
-| `--strict` | treat warnings as errors (use in CI) |
-| `--quiet` | print only on error |
+Exit: `0` ok / absent / warnings-without-strict · `1` error · `2` usage. Shares
+its logic with the CLI (`../src/validate.mjs`).
 
-Exit codes: `0` ok / absent / warnings-without-strict · `1` structural or lifecycle
-error · `2` usage error.
+## schema-check.mjs
 
-## What it checks
+Validate records against [`schema/worklog.schema.json`](../schema/worklog.schema.json).
+Needs `ajv` — used in CI and by downstream tooling that wants a trusted schema
+result.
 
-- JSON Lines shape; one object per line
-- required fields per record type (SPEC §5)
-- `seq` strictly increasing (SPEC §4.2)
-- intent lifecycle (SPEC §6): every `intent.promote` has a prior `intent.open`;
-  no double open/promote; a `gate: "fail"` promote lists `landmines`
-- handoff pairing: `handoff.end` needs an open `handoff.start`; a non-`pass` end
-  carries `findings`
-- reports intents left open — the pointer to unfinished / uncommitted work
-
-## What it does not check
-
-It never runs Git. The Git cross-checks — base commit is an ancestor of HEAD,
-promoted commits are reachable — are pickup-sequence steps a worker runs directly
-(`git log <base>..HEAD`), per SPEC §7.1.
-
-## Run it
-
-At **pickup** (after reading the log, before writing your `handoff.start`) and
-before **drop**. A project may also wire it into a `pre-commit` hook or CI with
-`--strict`.
-
-```sh
-# from your project root
-node path/to/verify-worklog.mjs
 ```
+npm install --no-save ajv@8 ajv-formats@3
+node tools/schema-check.mjs examples/*.jsonl
+```
+
+## git hook
+
+A `prepare-commit-msg` reminder hook lives at
+[`../integrations/git-hooks/prepare-commit-msg`](../integrations/git-hooks/prepare-commit-msg).

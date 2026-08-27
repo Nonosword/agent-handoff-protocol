@@ -4,22 +4,20 @@
 
 [![ci](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![spec: 0.1.0](https://img.shields.io/badge/spec-0.1.0%20draft-orange.svg)](./SPEC.md)
+[![spec: 0.2.0](https://img.shields.io/badge/spec-0.2.0%20draft-orange.svg)](./SPEC.md)
 
-> A tiny append-only log so rotated coding agents don't lose the thread when one
-> hits its usage limit and the next takes over.
+> An append-only worklog so rotated coding agents don't lose the thread when one
+> hits its usage limit and the next takes over. Kept in a store **outside** your
+> project — your repo is never touched.
 
 ## The problem
 
 You run several coding agents against one repo — Codex, Claude, a local model —
 and rotate them as each hits its usage limit. An agent often gets cut off
-**mid-edit**, with no chance to explain itself. The next agent inherits:
-
-- an uncommitted diff with no context,
-- commits that show *what* changed but not what was deliberately skipped or what
-  came next,
-- and, if it trusts a hand-written "here's what I did" summary, a decent chance
-  that summary is wrong (marks work done that has a failing test).
+**mid-edit**, with no chance to explain itself. The next agent inherits an
+uncommitted diff with no context, commits that show *what* changed but not what
+was skipped or what came next, and — if it trusts a hand-written summary — a
+decent chance that summary is wrong.
 
 ## The idea
 
@@ -33,49 +31,65 @@ Split the record in two, by what each medium is good at:
 | Where are the hazards and shortcuts? | worklog — `landmines` |
 | What should the next agent do? | worklog — `next` / `plan` |
 
-The worklog is `.coworker/worklog.jsonl`: repository root, **git-ignored**,
-**append-only**, one JSON object per line, ordered by an integer `seq`.
-
 ```
-.coworker/worklog.jsonl
+handoff.start   ── agent picks up: verified base commit + gate result + plan
+  intent.open      ── before a small commit: what I intend
+  intent.promote   ── after it lands green: what I did · landmines · next
+  intent.open
+  intent.promote
+handoff.end     ── best-effort on stop: end commit + gate + findings + open intents
 
-  handoff.start   ── agent picks up: verified base commit + gate result + plan
-    intent.open      ── before a small commit: what I intend
-    intent.promote   ── after it lands green: what I did · landmines · next
-    intent.open
-    intent.promote
-  handoff.end     ── best-effort on stop: end commit + gate + findings + open intents
-
-  handoff.start   ── next agent: reconcile commits since the last base,
-                     adopt any open intent, re-verify, continue
+handoff.start   ── next agent: reconcile commits since the last base,
+                   adopt any open intent, re-verify, continue
 ```
 
 An `intent.open` with no matching `intent.promote` is the pointer the next agent
 follows straight to the unfinished work in the dirty tree — even if the previous
 agent vanished without writing `handoff.end`.
 
-## Quick start
+The worklog is one JSON-Lines file per project, **append-only**, ordered by an
+integer `seq`, living in a per-user store at
+`$XDG_DATA_HOME/agent-handoff/` — keyed by the project's Git identity, so it
+works from any subdirectory and after a re-clone. Nothing is added to your repo.
+(An in-repo `.coworker/worklog.jsonl` is also a valid layout — see [SPEC §4.3](./SPEC.md).)
 
-**1.** Ignore the worklog — add to your project's `.gitignore`:
-
-```
-.coworker/
-```
-
-**2.** Tell your agents to follow the protocol. Copy the snippet for your setup
-from [`integrations/`](./integrations/) — [Claude Code](./integrations/claude-code.md),
-[Codex](./integrations/codex.md), [generic](./integrations/generic-agent.md) — into
-`CLAUDE.md` / `AGENTS.md` / your system prompt.
-
-**3.** Vendor the validator (zero dependencies) and run it at pickup and before
-stopping:
+## Install
 
 ```sh
-node tools/verify-worklog.mjs
+git clone https://github.com/Nonosword/agent-handoff-protocol ~/Repositories/agent-handoff-protocol
+cd ~/Repositories/agent-handoff-protocol
+./install.sh
 ```
 
-The first agent creates the file with a single `handoff.start`
-(`continuesFrom: null`). That's it.
+The installer symlinks the `ahp` / `ahp-mcp` CLIs onto your PATH, creates the
+store, detects whether `claude` and `codex` are installed, then asks how your
+agents should reach `ahp`:
+
+- **skill** — deploys the Claude Code skill to `~/.claude/skills/` and appends
+  the Codex `AGENTS.md` snippet. Agents run the `ahp` CLI.
+- **mcp** — registers `ahp-mcp` as an MCP server with the detected hosts. Agents
+  call tools (`ahp_pickup`, `ahp_start`, …) directly.
+
+`./install.sh --mode skill|mcp` to skip the prompt · `--dry-run` · `--uninstall`.
+
+Requires Node ≥ 18.17 and Git.
+
+## Use it
+
+From inside any Git repo:
+
+```sh
+ahp status          # project, baton holder, open intents, tree/gate state
+ahp pickup          # guided pickup: last handoff, commits since, open intents
+ahp start   --plan "add rate limiting" --gate pass --evidence "188 tests pass"
+ahp intent open   --id i-0828-a --title "token bucket" --intended "per-IP, 429 on exhaustion"
+ahp intent promote --id i-0828-a --commit 9f2e1df --gate pass \
+  --actual "middleware + 6 tests" --landmine "in-process only" --next "shared-cache state"
+ahp end     --reason limit --summary "1 of 3 commits landed" --gate pass --evidence "194 pass"
+```
+
+The first `ahp` command in a repo auto-registers it. `ahp` fills in `seq`, the
+timestamp, the base commit and tree state from Git — you supply the meaning.
 
 ## Records
 
@@ -84,13 +98,10 @@ Four types. Full field tables in [`SPEC.md`](./SPEC.md) §5; machine contract in
 
 | type | when | carries |
 | --- | --- | --- |
-| `handoff.start` | picking up the baton | `base` (verified commit + gate + tree state), `plan`, `continuesFrom` |
+| `handoff.start` | picking up the baton | `base` (verified commit + gate + tree), `plan`, `continuesFrom` |
 | `intent.open` | before a commit | `intentId`, `title`, `intended` |
 | `intent.promote` | after it lands green | `commits`, `gate`, `actual`, `landmines`, `next` |
 | `handoff.end` | stopping (best-effort) | `reason`, `end` (commit + gate), `summary`, `findings` |
-
-Common to all: `type`, `seq` (strictly increasing integer), `at` (UTC RFC 3339),
-`worker`.
 
 See [`examples/relay.jsonl`](./examples/relay.jsonl) for a full rotation with a
 mid-session cutoff.
@@ -100,19 +111,19 @@ mid-session cutoff.
 | Path | |
 | --- | --- |
 | [`SPEC.md`](./SPEC.md) | the normative protocol |
-| [`schema/worklog.schema.json`](./schema/worklog.schema.json) | JSON Schema (draft 2020-12) for one record |
-| [`tools/verify-worklog.mjs`](./tools/verify-worklog.mjs) | zero-dependency reference validator |
-| [`tools/schema-check.mjs`](./tools/schema-check.mjs) | schema validation (needs ajv) — for CI / other tooling |
-| [`examples/`](./examples/) | relay-with-cutoff, solo session, hard cutoff |
-| [`integrations/`](./integrations/) | Claude Code / Codex / generic snippets, a `prepare-commit-msg` hook |
-| [`docs/rationale.md`](./docs/rationale.md) | design decisions & FAQ |
-| [`docs/adoption.md`](./docs/adoption.md) | adding AHP to an existing project |
+| [`bin/ahp`](./bin/ahp), [`src/`](./src/) | the reference CLI |
+| [`bin/ahp-mcp`](./bin/ahp-mcp) | the MCP server |
+| [`schema/worklog.schema.json`](./schema/worklog.schema.json) | JSON Schema for one record |
+| [`skills/claude-code/`](./skills/claude-code/) | Claude Code skill |
+| [`integrations/`](./integrations/) | Codex snippet, MCP config, generic prompt, git hook |
+| [`tools/verify-worklog.mjs`](./tools/verify-worklog.mjs) | standalone file validator |
+| [`examples/`](./examples/) | relay-with-cutoff, solo, hard cutoff |
+| [`docs/`](./docs/) | [rationale & FAQ](./docs/rationale.md), [adoption](./docs/adoption.md) |
 
 ## Why not just…
 
 - **…read the commit messages?** They don't cover uncommitted work, deliberate
-  non-choices, or catch an over-claimed "done". See
-  [rationale](./docs/rationale.md).
+  non-choices, or catch an over-claimed "done". See [rationale](./docs/rationale.md).
 - **…keep an editable `HANDOFF.md`?** No history, no blame, and two agents across
   a rotation clobber it. Append-only + `seq` fixes that.
 - **…use timestamps for order?** Three runtimes on two machines don't agree on
@@ -120,9 +131,8 @@ mid-session cutoff.
 
 ## Status
 
-Draft, `0.1.0`. Record fields may still change before `1.0`. Follows
-[SemVer](https://semver.org/); breaking changes are a major bump and land in
-[`CHANGELOG.md`](./CHANGELOG.md).
+Draft, `0.2.0`. Record fields may still change before `1.0`. Follows SemVer;
+breaking changes are a major bump and land in [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Origin
 

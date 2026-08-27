@@ -6,33 +6,52 @@ on:
   pull_request:
 
 jobs:
-  validate:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["18.17", "20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Configure git identity (needed by the test repos)
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+
+      - name: End-to-end test suite
+        run: npm test
+
+      - name: Validate bundled examples
+        run: npm run verify:examples
+
+      - name: Examples match the JSON Schema
+        run: |
+          npm install --no-save ajv@8 ajv-formats@3
+          npm run schema:check
+
+      - name: install.sh dry-run
+        run: |
+          ./install.sh --mode skill --dry-run
+          ./install.sh --mode mcp --dry-run
+          ./install.sh --uninstall --dry-run
+
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - name: Validate every example worklog (structural + lifecycle)
+      - name: Syntax-check JS
         run: |
-          set -e
-          for f in examples/*.jsonl; do
-            echo "== $f =="
-            node tools/verify-worklog.mjs --file "$f"
+          for f in $(git ls-files '*.mjs') bin/ahp bin/ahp-mcp; do
+            node --check "$f" && echo "ok $f"
           done
-
-      - name: Strict-validate the clean examples
+      - name: Shell scripts parse
         run: |
-          node tools/verify-worklog.mjs --file examples/relay.jsonl --strict
-          node tools/verify-worklog.mjs --file examples/solo.jsonl --strict
-
-      - name: Check examples against the JSON Schema
-        run: |
-          npm install --no-save ajv@8 ajv-formats@3
-          node tools/schema-check.mjs examples/*.jsonl
-
-      - name: Validator self-test
-        working-directory: tools
-        run: npm test
+          bash -n install.sh
+          sh -n integrations/git-hooks/prepare-commit-msg

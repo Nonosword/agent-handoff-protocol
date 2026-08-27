@@ -1,7 +1,9 @@
-# The AHP worklog is process state, never committed — in THIS repo or any repo
-# that adopts the protocol. Copy this block into your project's .gitignore.
+# If you keep the worklog IN a project repo instead of the external store,
+# copy this line into that project's .gitignore:
 .coworker/
 
-# Node
+# This repo
 node_modules/
 *.log
+*.ahpbak
+*.ahptmp

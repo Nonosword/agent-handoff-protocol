@@ -1,37 +1,24 @@
 #!/bin/sh
-# AHP reminder hook — prepare-commit-msg
-#
-# Appends a commented reminder to the commit message template so an agent (or a
-# human) does not forget to open/promote the intent for this commit.
+# AHP reminder hook. Appends stripped comment lines to the commit message so an
+# agent (or human) does not forget to open/promote the intent for this commit.
+# Never blocks. Requires `ahp` on PATH.
 #
 # Install:  cp integrations/git-hooks/prepare-commit-msg .git/hooks/ && chmod +x .git/hooks/prepare-commit-msg
-# Or point core.hooksPath at a tracked hooks dir and vendor it there.
-#
-# It never blocks a commit; it only adds comment lines that git strips.
 
 MSG_FILE="$1"
 SOURCE="$2"
+case "$SOURCE" in merge|squash) exit 0 ;; esac
+command -v ahp >/dev/null 2>&1 || exit 0
 
-# Skip for merges, squashes, amends with an existing message, etc.
-case "$SOURCE" in
-  merge|squash) exit 0 ;;
-esac
-
-WORKLOG=".coworker/worklog.jsonl"
+OPEN=$(ahp read --type intent.open --json 2>/dev/null | wc -l | tr -d ' ')
+DONE=$(ahp read --type intent.promote --json 2>/dev/null | wc -l | tr -d ' ')
 
 {
   echo ""
   echo "# --- AHP reminder (comments are stripped) ---"
-  if [ -f "$WORKLOG" ]; then
-    OPEN=$(grep -c '"type":"intent.open"' "$WORKLOG" 2>/dev/null || echo 0)
-    PROMOTED=$(grep -c '"type":"intent.promote"' "$WORKLOG" 2>/dev/null || echo 0)
-    echo "# worklog: $OPEN opened / $PROMOTED promoted intents"
-    echo "# - did you append an intent.open for this commit?"
-    echo "# - after it passes the gate, append intent.promote (actual / landmines / next)"
-  else
-    echo "# no .coworker/worklog.jsonl yet — run the AHP pickup sequence and create it"
-  fi
-  echo "# validate: node tools/verify-worklog.mjs"
+  echo "# worklog: ${OPEN:-?} intent.open / ${DONE:-?} intent.promote for this project"
+  echo "# - opened an intent for this commit?         ahp intent open --id <id> ..."
+  echo "# - after the gate passes:                    ahp intent promote --id <id> --commit <sha> ..."
 } >> "$MSG_FILE"
 
 exit 0

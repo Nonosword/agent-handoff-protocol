@@ -1,0 +1,32 @@
+{
+  "name": "agent-handoff-protocol",
+  "version": "0.2.0",
+  "description": "Continuity for rotated coding agents: an append-only worklog in a central store, driven by the `ahp` CLI or an MCP server, with zero intrusion into your project repo.",
+  "license": "MIT",
+  "author": "Nonosword",
+  "type": "module",
+  "bin": {
+    "ahp": "./bin/ahp",
+    "ahp-mcp": "./bin/ahp-mcp"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "schema/",
+    "SPEC.md",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nonosword/agent-handoff-protocol.git"
+  },
+  "keywords": ["ahp", "agent-handoff", "worklog", "llm-agent", "handoff", "claude-code", "codex", "mcp"],
+  "scripts": {
+    "test": "node test/run.mjs",
+    "verify:examples": "for f in examples/*.jsonl; do node tools/verify-worklog.mjs --file \"$f\" || exit 1; done",
+    "schema:check": "node tools/schema-check.mjs examples/*.jsonl"
+  }
+}
