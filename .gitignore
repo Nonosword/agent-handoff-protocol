@@ -1,0 +1,7 @@
+# The AHP worklog is process state, never committed — in THIS repo or any repo
+# that adopts the protocol. Copy this block into your project's .gitignore.
+.coworker/
+
+# Node
+node_modules/
+*.log

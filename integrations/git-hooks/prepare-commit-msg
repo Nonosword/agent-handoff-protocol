@@ -1,0 +1,37 @@
+#!/bin/sh
+# AHP reminder hook — prepare-commit-msg
+#
+# Appends a commented reminder to the commit message template so an agent (or a
+# human) does not forget to open/promote the intent for this commit.
+#
+# Install:  cp integrations/git-hooks/prepare-commit-msg .git/hooks/ && chmod +x .git/hooks/prepare-commit-msg
+# Or point core.hooksPath at a tracked hooks dir and vendor it there.
+#
+# It never blocks a commit; it only adds comment lines that git strips.
+
+MSG_FILE="$1"
+SOURCE="$2"
+
+# Skip for merges, squashes, amends with an existing message, etc.
+case "$SOURCE" in
+  merge|squash) exit 0 ;;
+esac
+
+WORKLOG=".coworker/worklog.jsonl"
+
+{
+  echo ""
+  echo "# --- AHP reminder (comments are stripped) ---"
+  if [ -f "$WORKLOG" ]; then
+    OPEN=$(grep -c '"type":"intent.open"' "$WORKLOG" 2>/dev/null || echo 0)
+    PROMOTED=$(grep -c '"type":"intent.promote"' "$WORKLOG" 2>/dev/null || echo 0)
+    echo "# worklog: $OPEN opened / $PROMOTED promoted intents"
+    echo "# - did you append an intent.open for this commit?"
+    echo "# - after it passes the gate, append intent.promote (actual / landmines / next)"
+  else
+    echo "# no .coworker/worklog.jsonl yet — run the AHP pickup sequence and create it"
+  fi
+  echo "# validate: node tools/verify-worklog.mjs"
+} >> "$MSG_FILE"
+
+exit 0

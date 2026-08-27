@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Nonosword/agent-handoff-protocol/main/schema/worklog.schema.json",
+  "title": "AHP worklog record",
+  "description": "One record from a `.coworker/worklog.jsonl` stream. The file is JSON Lines: validate each line against this schema. Ordering and cross-record lifecycle rules (seq strictly increasing, promote requires a prior open, no double promote) are defined in SPEC.md and checked by tools/verify-worklog.mjs, not by this schema.",
+  "type": "object",
+  "required": ["type", "seq", "at", "worker"],
+  "properties": {
+    "type": {
+      "enum": ["handoff.start", "handoff.end", "intent.open", "intent.promote"]
+    },
+    "seq": { "type": "integer", "minimum": 1 },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp in UTC (…Z)."
+    },
+    "worker": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 120 },
+        {
+          "type": "object",
+          "required": ["id"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "model": { "type": "string", "maxLength": 120 },
+            "runtime": { "type": "string", "maxLength": 120 }
+          },
+          "additionalProperties": true
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "handoff.start" } } },
+      "then": {
+        "required": ["continuesFrom", "base", "plan"],
+        "properties": {
+          "continuesFrom": { "type": ["integer", "null"], "minimum": 1 },
+          "plan": { "type": "string", "minLength": 1 },
+          "base": { "$ref": "#/$defs/state" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "handoff.end" } } },
+      "then": {
+        "required": ["reason", "end", "summary"],
+        "properties": {
+          "reason": { "enum": ["limit", "task-done", "blocked", "handoff-requested"] },
+          "end": { "$ref": "#/$defs/state" },
+          "summary": { "type": "string", "minLength": 1 },
+          "openIntents": { "type": "array", "items": { "type": "string" } },
+          "findings": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "intent.open" } } },
+      "then": {
+        "required": ["intentId", "title", "intended"],
+        "properties": {
+          "intentId": { "$ref": "#/$defs/intentId" },
+          "title": { "type": "string", "minLength": 1 },
+          "intended": { "type": "string", "minLength": 1 },
+          "refs": { "type": "array", "items": { "type": "string" } },
+          "scope": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "intent.promote" } } },
+      "then": {
+        "required": ["intentId", "commits", "gate", "actual"],
+        "properties": {
+          "intentId": { "$ref": "#/$defs/intentId" },
+          "commits": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "gate": { "$ref": "#/$defs/gate" },
+          "actual": { "type": "string", "minLength": 1 },
+          "landmines": { "type": "array", "items": { "type": "string" } },
+          "next": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "gate": { "enum": ["pass", "fail", "not-run"] },
+    "intentId": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[A-Za-z0-9._-]+$" },
+    "state": {
+      "type": "object",
+      "required": ["commit", "gate", "treeClean"],
+      "properties": {
+        "commit": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "gate": { "$ref": "#/$defs/gate" },
+        "gateEvidence": { "type": "string" },
+        "treeClean": { "type": "boolean" },
+        "verifiedBy": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

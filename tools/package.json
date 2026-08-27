@@ -1,0 +1,29 @@
+{
+  "name": "@nonosword/verify-worklog",
+  "version": "0.1.0",
+  "description": "Reference validator for the Agent Handoff Protocol (AHP) worklog format",
+  "license": "MIT",
+  "author": "Nonosword",
+  "type": "module",
+  "bin": {
+    "verify-worklog": "./verify-worklog.mjs"
+  },
+  "files": [
+    "verify-worklog.mjs",
+    "schema-check.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nonosword/agent-handoff-protocol.git",
+    "directory": "tools"
+  },
+  "keywords": ["ahp", "agent-handoff", "worklog", "llm-agent", "handoff"],
+  "scripts": {
+    "test": "node verify-worklog.mjs --file ../examples/relay.jsonl --strict && node verify-worklog.mjs --file ../examples/solo.jsonl --strict",
+    "schema:check": "node schema-check.mjs ../examples/*.jsonl"
+  }
+}
