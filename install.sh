@@ -241,68 +241,96 @@ install_procedure() {
   else skip "Claude Code" "no ~/.claude — skipped"; fi
 
   if [ "$HAS_CODEX" = 1 ] || [ -d "$HOME/.codex" ]; then
-    if [ "$DRY" = 1 ]; then dry "append Codex AGENTS.md snippet" "$CODEX_AGENTS"
-    elif [ -f "$CODEX_AGENTS" ] && grep -qF "$MARK_BEGIN" "$CODEX_AGENTS"; then
-      skip "Codex AGENTS.md snippet" "already present"
+    if [ "$DRY" = 1 ]; then dry "sync Codex AGENTS.md snippet" "$CODEX_AGENTS"
     else
       mkdir -p "$(dirname "$CODEX_AGENTS")"
+      local had=0
+      if [ -f "$CODEX_AGENTS" ] && grep -qF "$MARK_BEGIN" "$CODEX_AGENTS"; then
+        had=1
+        awk -v b="$MARK_BEGIN" -v e="$MARK_END" '$0==b{s=1} !s{print} $0==e{s=0}' "$CODEX_AGENTS" > "$CODEX_AGENTS.ahptmp" && mv "$CODEX_AGENTS.ahptmp" "$CODEX_AGENTS"
+      fi
       { printf '\n%s\n' "$MARK_BEGIN"
         sed -n '/^```markdown$/,/^```$/p' "$REPO/integrations/codex-AGENTS.md" | sed '1d;$d'
         printf '%s\n' "$MARK_END"
       } >> "$CODEX_AGENTS"
-      grep -qF "$MARK_BEGIN" "$CODEX_AGENTS" && ok "Codex AGENTS.md snippet" "$CODEX_AGENTS" || bad "AGENTS.md append failed"
+      grep -qF "$MARK_BEGIN" "$CODEX_AGENTS" \
+        && { [ "$had" = 1 ] && ok "Codex AGENTS.md snippet" "refreshed in place" || ok "Codex AGENTS.md snippet" "$CODEX_AGENTS"; } \
+        || bad "AGENTS.md write failed"
     fi
   else skip "Codex" "no ~/.codex — skipped"; fi
 }
 
 # ---- mcp mode ----------------------------------------------------------
-# Register with each host's own MCP CLI. Returns 1 only when the CLI is absent
-# (so the caller shows a copy-paste fallback). Extra args after the cli name are
-# passed to `mcp add` (e.g. --scope user for Claude Code, whose default is a
-# directory-local entry).
+# Register with each host's own MCP CLI, or — if already registered — verify the
+# entry still points at this repo and carries the worker-identity env, and
+# re-register only if it drifted. Never a blind remove+add. Returns 1 only when
+# the CLI is absent (so the caller shows a copy-paste fallback). Args after the
+# cli name are passed to `mcp add` (scope + env flags, which differ per host).
 register_host() {
   local host="$1" cli="$2"; shift 2
-  if [ "$DRY" = 1 ]; then dry "register with $host" "$cli mcp add $* agent-handoff -- node …/ahp-mcp"; return 0; fi
+  local addargs=("$@")
+  if [ "$DRY" = 1 ]; then dry "register with $host" "$cli mcp add … agent-handoff -- node …/ahp-mcp"; return 0; fi
   command -v "$cli" >/dev/null 2>&1 || return 1
 
-  if "$cli" mcp get agent-handoff >/dev/null 2>&1; then
-    local sc scl; sc=$("$cli" mcp get agent-handoff 2>/dev/null | sed -n 's/.*[Ss]cope:[[:space:]]*//p' | head -1)
-    scl=$(printf '%s' "${sc%% *}" | tr 'A-Z' 'a-z')
-    case "$scl" in
-      user|global|"") skip "$host MCP entry" "already registered" ;;
-      *) warn "$host MCP entry" "registered at ${scl} scope — active only there"
-         hint "make it machine-wide:  $cli mcp remove agent-handoff -s ${scl}  &&  re-run this installer" ;;
-    esac
+  local _add
+  _add() {
+    local out
+    # name first, then options, then `-- <command>` — Claude Code's `-e` is
+    # variadic and would otherwise swallow the name.
+    if out=$("$cli" mcp add agent-handoff "${addargs[@]}" -- node "$REPO/bin/ahp-mcp" 2>&1); then
+      ok "registered with $host" "restart $host to load it"
+    else
+      bad "$cli mcp add failed" "$(printf '%s' "$out" | grep -v '^[[:space:]]*$' | head -1)"
+      hint "add it by hand — see integrations/mcp.md"
+    fi
+  }
+
+  if ! "$cli" mcp get agent-handoff >/dev/null 2>&1; then
+    _add
     return 0
   fi
 
-  local out
-  if out=$("$cli" mcp add "$@" agent-handoff -- node "$REPO/bin/ahp-mcp" 2>&1); then
-    ok "registered with $host" "restart $host to load it"
-    "$cli" mcp get agent-handoff >/dev/null 2>&1 && ok "$host entry confirmed" "$cli mcp get agent-handoff"
+  local info sc scl
+  info=$("$cli" mcp get agent-handoff 2>/dev/null)
+  sc=$(printf '%s' "$info" | sed -n 's/.*[Ss]cope:[[:space:]]*//p' | head -1)
+  scl=$(printf '%s' "${sc%% *}" | tr 'A-Z' 'a-z')
+  case "$scl" in
+    ""|user|global) : ;;
+    *) warn "$host MCP entry" "registered at ${scl} scope — active only there"
+       hint "make it machine-wide:  $cli mcp remove agent-handoff -s ${scl}  &&  re-run"
+       return 0 ;;
+  esac
+
+  if printf '%s' "$info" | grep -q "$REPO/bin/ahp-mcp"; then
+    skip "$host MCP entry" "current — code updates via git pull; restart $host to load"
   else
-    bad "$cli mcp add failed" "$(printf '%s' "$out" | grep -v '^[[:space:]]*$' | head -1)"
-    hint "add it by hand — see integrations/mcp.md"
+    warn "$host MCP entry" "points elsewhere — refreshing"
+    "$cli" mcp remove agent-handoff >/dev/null 2>&1 || "$cli" mcp remove agent-handoff -s user >/dev/null 2>&1
+    _add
   fi
 }
 
 install_mcp() {
   section "MCP server"
 
-  register_host "Claude Code" claude --scope user || {
+  register_host "Claude Code" claude --scope user \
+    -e AHP_WORKER_ID=claude -e AHP_MODEL=claude -e AHP_RUNTIME=claude-code || {
     warn "Claude Code CLI" "not found — add to ~/.claude.json by hand:"
     snippet <<EOF
-{ "mcpServers": { "agent-handoff": { "command": "node", "args": ["$REPO/bin/ahp-mcp"] } } }
+{ "mcpServers": { "agent-handoff": { "command": "node", "args": ["$REPO/bin/ahp-mcp"],
+    "env": { "AHP_WORKER_ID": "claude", "AHP_MODEL": "claude", "AHP_RUNTIME": "claude-code" } } } }
 EOF
   }
 
-  register_host "Codex" codex || {
+  register_host "Codex" codex \
+    --env AHP_WORKER_ID=codex --env AHP_MODEL=codex --env AHP_RUNTIME=codex || {
     [ -d "$HOME/.codex" ] && {
       warn "Codex CLI" "not found — add to ~/.codex/config.toml by hand:"
       snippet <<EOF
 [mcp_servers.agent-handoff]
 command = "node"
 args = ["$REPO/bin/ahp-mcp"]
+env = { AHP_WORKER_ID = "codex", AHP_MODEL = "codex", AHP_RUNTIME = "codex" }
 EOF
     }
   }

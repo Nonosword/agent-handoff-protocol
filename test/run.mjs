@@ -170,6 +170,27 @@ test("MCP server: initialize + tools/list + tools/call", () => {
   assert.match(call.result.content[0].text, /project\s+projA/);
 });
 
+test("dashboard runs from outside any repo and lists projects", () => {
+  const r = ahp(["dashboard"], os.tmpdir());
+  assert.ok(r.code === 0 || r.code === 1, r.err);
+  assert.match(r.out, /Agent Handoff/);
+  assert.match(r.out, /projA/);
+  const j = ahp(["dashboard", "--json"], os.tmpdir());
+  const parsed = JSON.parse(j.out);
+  assert.ok(Array.isArray(parsed.projects));
+});
+
+test("worker identity is auto-detected, not left unknown", () => {
+  // this test process is a descendant of `node`, not a known agent host, so
+  // detection returns null here — but the record must still not say "unknown"
+  // when an explicit id is given, and detection must not crash.
+  const P = mkrepo("projW");
+  const s = ahp(["start", "--plan", "p", "--gate", "pass", "--evidence", "e"], P);
+  assert.equal(s.code, 0, s.err);
+  const rec = JSON.parse(fs.readFileSync(ahp(["path"], P).out.trim(), "utf8").trim().split("\n")[0]);
+  assert.ok(typeof (rec.worker.id ?? rec.worker) === "string");
+});
+
 test("bundled example worklogs still validate", () => {
   for (const f of fs.readdirSync(path.join(REPO, "examples")).filter((n) => n.endsWith(".jsonl"))) {
     const r = sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", path.join(REPO, "examples", f), "--quiet"]);

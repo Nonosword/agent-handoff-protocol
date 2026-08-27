@@ -9,10 +9,16 @@ The protocol becomes storage-location-agnostic and ships a real CLI.
 
 ### Added
 
-- **`ahp` CLI** (zero runtime dependencies) — `status`, `pickup`, `start`,
-  `intent open|promote`, `end`, `read`, `log`, `verify`, `project`, `compact`,
-  `path`. Assigns `seq` / `at` and captures Git state (`base.commit`, tree
-  cleanliness) so a worker only supplies the semantic content.
+- **`ahp` CLI** (zero runtime dependencies) — `dashboard`, `status`, `pickup`,
+  `start`, `intent open|promote`, `end`, `read`, `log`, `verify`, `project`,
+  `compact`, `path`. Assigns `seq` / `at` and captures Git state
+  (`base.commit`, tree cleanliness) so a worker only supplies the semantic
+  content.
+- **`ahp dashboard`** — cross-project overview, runnable from anywhere (not
+  inside a repo). Per project: baton holder + plan, worklog counts, open
+  intents, `verify` status, git HEAD/branch/tree, and a drift check
+  (commits since the baton base with no `intent.promote`). `--json` for
+  scripting; exit 1 if any project has an error or drift.
 - **External store binding** — the worklog lives in a per-user store
   (`$XDG_DATA_HOME/agent-handoff/`), one file per project, keyed by the
   project's Git identity (normalized remote URL, else repo path + hash). The
@@ -56,10 +62,24 @@ The protocol becomes storage-location-agnostic and ships a real CLI.
   to a git call that actually succeeded (real stdout, status 0), which made AHP
   wrongly report "not a Git repository". It now only treats `.error` as fatal
   when there is no exit status at all.
-- **Worker attribution** — the MCP server now takes the default worker identity
-  from the host's `initialize` `clientInfo.name`, so records are attributed to
-  e.g. `codex-cli` / `claude-code` instead of `unknown`. An explicit id and the
-  `AHP_*` env vars still win.
+- **Worker attribution** — records are no longer left as `unknown`:
+  - the CLI walks up the process tree and, if an ancestor is a known agent host
+    (Codex, Claude Code, Cursor, Aider, …), uses that as the identity — zero
+    config, works whether the agent calls `ahp` directly or through the MCP
+    server;
+  - the MCP server also takes a default from the host's `initialize`
+    `clientInfo.name`;
+  - `install.sh` registers the MCP server with `AHP_WORKER_ID` / `AHP_MODEL` /
+    `AHP_RUNTIME` in its env.
+  - Explicit `--worker-id` and the `AHP_*` env vars still win over all of it.
+    A session that started as `unknown` no longer propagates `unknown` to its
+    later records.
+- **`install.sh` re-run is now a clean sync** — the Codex `AGENTS.md` snippet is
+  refreshed in place (was "append once, never update"); the MCP registration is
+  verified to still point at this repo and carry the identity env, and
+  re-registered only if it drifted (never a blind remove+add). So updating is
+  `git pull` + re-run `install.sh` + restart the host — no manual
+  `mcp remove`/`add`.
 
 ## [0.1.0] — 2026-08-27
 

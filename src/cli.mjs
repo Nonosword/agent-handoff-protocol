@@ -10,6 +10,7 @@ import { storeHome } from "./paths.mjs";
 import { readEntries, analyze, appendRecord } from "./worklog.mjs";
 import { validateRecords } from "./validate.mjs";
 import { renderStatus, renderPickup, renderLog } from "./render.mjs";
+import { detectRuntime } from "./worker-detect.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PKG = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "utf8"));
@@ -81,6 +82,11 @@ async function run(argv) {
   const home = storeHome();
 
   switch (cmd) {
+    case "dashboard": case "dash": case "overview": {
+      const { values } = parse(rest, { json: { type: "boolean" } });
+      const { dashboard } = await import("./dashboard.mjs");
+      return dashboard({ home, json: values.json });
+    }
     case "status": return cmdStatus(rest, home);
     case "pickup": return cmdPickup(rest, home);
     case "read": return cmdRead(rest, home);
@@ -134,8 +140,10 @@ function worker(values, fallbackFromLog) {
   const model = values.model || process.env.AHP_MODEL;
   const runtime = values.runtime || process.env.AHP_RUNTIME;
   if (id || model || runtime) return { id: id || model || "worker", ...(model ? { model } : {}), ...(runtime ? { runtime } : {}) };
-  if (fallbackFromLog) return fallbackFromLog;
-  return { id: "unknown" };
+  if (fallbackFromLog && (typeof fallbackFromLog === "string" ? fallbackFromLog : fallbackFromLog.id) !== "unknown") return fallbackFromLog;
+  const detected = detectRuntime();
+  if (detected) return { id: detected, runtime: detected };
+  return fallbackFromLog ?? { id: "unknown" };
 }
 
 function stateFrom(g, gate, evidence) {
