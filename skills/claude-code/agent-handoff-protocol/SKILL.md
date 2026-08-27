@@ -82,6 +82,14 @@ it is required if `--gate` is not `pass`.
 - `ahp verify` — check the worklog is well-formed
 - `ahp --help` — full reference
 
-The worker identity is read from `$AHP_WORKER_ID` / `$AHP_MODEL` / `$AHP_RUNTIME`
-if set, otherwise inherited from the last `handoff.start`. Pass
-`--worker-id claude --model claude --runtime claude-code` on `ahp start` to set it.
+## Worker identity
+
+Records must be attributed, not left as `unknown`. Via the MCP tools this is
+automatic (from the host handshake). Via the CLI, either export once —
+
+```
+export AHP_WORKER_ID=claude AHP_MODEL=claude AHP_RUNTIME=claude-code
+```
+
+— or pass `--worker-id claude --model claude --runtime claude-code` on your
+`ahp start`. Later records in the session inherit it.

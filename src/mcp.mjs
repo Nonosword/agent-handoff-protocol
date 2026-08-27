@@ -166,9 +166,20 @@ function toArgv(name, a = {}) {
   }
 }
 
+// Worker identity: the MCP host tells us who it is in the initialize handshake
+// (clientInfo.name). We use that as the default so records aren't attributed to
+// "unknown". An explicit worker_id in the tool call still wins; AHP_* env vars
+// still win over that.
+let clientName = null;
+
 function callTool(name, args) {
   const argv = toArgv(name, args);
-  const res = spawnSync(process.execPath, [AHP_BIN, ...argv], { encoding: "utf8", shell: false });
+  const env = { ...process.env };
+  if (clientName) {
+    env.AHP_WORKER_ID ??= clientName;
+    env.AHP_RUNTIME ??= clientName;
+  }
+  const res = spawnSync(process.execPath, [AHP_BIN, ...argv], { encoding: "utf8", shell: false, env });
   const out = `${res.stdout ?? ""}${res.stderr ? `\n${res.stderr}` : ""}`.trim();
   return { text: out || "(no output)", isError: (res.status ?? 1) !== 0 };
 }
@@ -184,6 +195,8 @@ function handle(msg) {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
+      const c = params?.clientInfo?.name;
+      if (typeof c === "string" && c.trim()) clientName = c.trim().replace(/\s+/g, "-").toLowerCase();
       return reply(id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },

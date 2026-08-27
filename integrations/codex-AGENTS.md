@@ -13,6 +13,10 @@ If the `ahp_*` MCP tools are available this session, use those (structured
 arguments, no shell quoting of the free-text fields). Otherwise use the `ahp`
 CLI below. Same steps, same order; `ahp <verb>` maps to the `ahp_<verb>` tool.
 
+Identify yourself so records aren't attributed to "unknown": via MCP this is
+automatic; via the CLI, `export AHP_WORKER_ID=codex AHP_MODEL=codex
+AHP_RUNTIME=codex-cli` once, or pass `--worker-id/--model/--runtime` on `ahp start`.
+
 BEFORE the first change this session:
   ahp pickup
 Read it: last handoff, commits since its base, and open intents (declared work

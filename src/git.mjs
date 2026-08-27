@@ -5,8 +5,16 @@ import { spawnSync } from "node:child_process";
 
 function git(cwd, args) {
   const res = spawnSync("git", args, { cwd, encoding: "utf8", shell: false });
-  if (res.error) return { ok: false, code: -1, out: "", err: String(res.error.message) };
-  return { ok: res.status === 0, code: res.status ?? -1, out: (res.stdout ?? "").trim(), err: (res.stderr ?? "").trim() };
+  // Some sandboxed runtimes (e.g. agent execution environments) attach an
+  // EPERM/EACCES `.error` to the result even when the command actually ran —
+  // real stdout, a concrete exit status. Trust the exit status whenever we have
+  // one; only treat `.error` as fatal when the process produced no status at
+  // all (a genuine spawn failure: git missing, blocked outright).
+  const status = typeof res.status === "number" ? res.status : null;
+  if (status === null && res.error) {
+    return { ok: false, code: -1, out: "", err: String(res.error.message) };
+  }
+  return { ok: status === 0, code: status ?? -1, out: (res.stdout ?? "").trim(), err: (res.stderr ?? "").trim() };
 }
 
 export function isGitRepo(cwd) {

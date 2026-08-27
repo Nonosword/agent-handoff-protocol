@@ -49,6 +49,18 @@ The protocol becomes storage-location-agnostic and ships a real CLI.
 - Record field for a starting/ending state uses `commit` (was `sha` in drafts).
 - `tools/verify-worklog.mjs` now shares `src/validate.mjs` with the CLI.
 
+### Fixed
+
+- **Sandboxed runtimes** — `src/git.mjs` trusted `spawnSync().error` over a
+  concrete exit status. Some agent execution sandboxes attach an EPERM `.error`
+  to a git call that actually succeeded (real stdout, status 0), which made AHP
+  wrongly report "not a Git repository". It now only treats `.error` as fatal
+  when there is no exit status at all.
+- **Worker attribution** — the MCP server now takes the default worker identity
+  from the host's `initialize` `clientInfo.name`, so records are attributed to
+  e.g. `codex-cli` / `claude-code` instead of `unknown`. An explicit id and the
+  `AHP_*` env vars still win.
+
 ## [0.1.0] — 2026-08-27
 
 Initial public draft: `SPEC.md`, JSON Schema, zero-dep file validator, examples,
