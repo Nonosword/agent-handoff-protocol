@@ -29,11 +29,12 @@ export function renderStatus({ project, git: g, analysis }) {
     return L.join("\n");
   }
   const s = analysis.lastStart;
+  const lastRec = analysis.records[analysis.records.length - 1];
   if (analysis.batonHeld) {
     L.push(`baton     HELD by ${workerLabel(analysis.batonWorker)}  (since ${ago(s.at)})`);
     L.push(`          plan: ${s.plan}`);
   } else {
-    L.push(`baton     free — last session by ${workerLabel(s?.worker)} ended ${s ? ago(s.at) : "?"}`);
+    L.push(`baton     free — last session by ${workerLabel(lastRec?.worker ?? s?.worker)} ended ${lastRec ? ago(lastRec.at) : "?"}`);
     L.push("          run `ahp pickup` then `ahp start`");
   }
   L.push(`records   ${analysis.count}   last seq ${analysis.lastSeq}`);
