@@ -18,7 +18,9 @@ The protocol becomes storage-location-agnostic and ships a real CLI.
   inside a repo). Per project: baton holder + plan, worklog counts, open
   intents, `verify` status, git HEAD/branch/tree, and a drift check
   (commits since the baton base with no `intent.promote`). `--json` for
-  scripting; exit 1 if any project has an error or drift.
+  scripting; exit 1 if any project has an error or drift. `-w`/`--watch`
+  turns it into a live view (alternate screen, `-n`/`--interval` seconds,
+  ctrl-c to exit, reflows on resize).
 - **External store binding** — the worklog lives in a per-user store
   (`$XDG_DATA_HOME/agent-handoff/`), one file per project, keyed by the
   project's Git identity (normalized remote URL, else repo path + hash). The

@@ -84,15 +84,8 @@ function toJson(rows) {
   }));
 }
 
-export function dashboard({ home = storeHome(), json = false } = {}) {
-  const projects = project.list(home);
-  const rows = projects.map((p) => gather(p, home));
-
-  if (json) {
-    process.stdout.write(`${JSON.stringify({ store: home, projects: toJson(rows) }, null, 2)}\n`);
-    return 0;
-  }
-
+function render(home, { footer = "" } = {}) {
+  const rows = project.list(home).map((p) => gather(p, home));
   const c = colors();
   const L = [];
   L.push("");
@@ -101,8 +94,8 @@ export function dashboard({ home = storeHome(), json = false } = {}) {
 
   if (rows.length === 0) {
     L.push(`  ${c.dim("nothing registered yet — run `ahp status` inside a git repo")}`);
-    process.stdout.write(L.join("\n") + "\n\n");
-    return 0;
+    if (footer) L.push(`  ${c.dim(footer)}`);
+    return { text: L.join("\n") + "\n", anyError: false };
   }
 
   let anyError = false;
@@ -155,6 +148,61 @@ export function dashboard({ home = storeHome(), json = false } = {}) {
     L.push("");
   }
 
-  process.stdout.write(L.join("\n") + "\n");
-  return anyError ? 1 : 0;
+  if (footer) L.push(`  ${c.dim(footer)}`);
+  return { text: L.join("\n") + "\n", anyError };
+}
+
+function sleep(ms) {
+  return new Promise((r) => { setTimeout(r, ms); });
+}
+
+export async function dashboard({ home = storeHome(), json = false, watch = false, interval = 5 } = {}) {
+  if (json) {
+    const rows = project.list(home).map((p) => gather(p, home));
+    process.stdout.write(`${JSON.stringify({ store: home, projects: toJson(rows) }, null, 2)}\n`);
+    return 0;
+  }
+
+  if (!watch) {
+    const { text, anyError } = render(home);
+    process.stdout.write(text);
+    return anyError ? 1 : 0;
+  }
+
+  if (!process.stdout.isTTY) {
+    const { text, anyError } = render(home, { footer: "(--watch needs a TTY; showing one snapshot)" });
+    process.stdout.write(text);
+    return anyError ? 1 : 0;
+  }
+
+  const every = Math.max(1, Number(interval) || 5);
+  const out = process.stdout;
+  let running = true;
+  const stop = () => { running = false; };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  out.write("\x1b[?1049h\x1b[?25l"); // alternate screen, hide cursor
+  const restore = () => out.write("\x1b[?25h\x1b[?1049l");
+
+  try {
+    while (running) {
+      const now = new Date().toTimeString().slice(0, 8);
+      const { text } = render(home, { footer: `updated ${now} · every ${every}s · ctrl-c to exit` });
+      out.write(`\x1b[H\x1b[2J${text}`);
+      // wake early on resize so the view reflows promptly
+      let woke = false;
+      const onResize = () => { woke = true; };
+      process.on("SIGWINCH", onResize);
+      for (let waited = 0; running && !woke && waited < every * 1000; waited += 200) {
+        await sleep(200);
+      }
+      process.removeListener("SIGWINCH", onResize);
+    }
+  } finally {
+    restore();
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+  }
+  return 0;
 }

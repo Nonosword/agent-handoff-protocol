@@ -25,6 +25,9 @@ USAGE
   ahp <command> [options]
 
 READ
+  dashboard [-w] [-n S]  every project: baton, worklog state, drift. Runs from
+                         anywhere. -w/--watch refreshes (default 5s, -n/--interval).
+                         --json for scripts.
   status                 project, baton holder, open intents, tree/gate state
   pickup                 guided pickup: last handoff, commits since, open intents
   read [--since N] [--tail K] [--type T] [--json]
@@ -83,9 +86,13 @@ async function run(argv) {
 
   switch (cmd) {
     case "dashboard": case "dash": case "overview": {
-      const { values } = parse(rest, { json: { type: "boolean" } });
+      const { values } = parse(rest, {
+        json: { type: "boolean" },
+        watch: { type: "boolean", short: "w" },
+        interval: { type: "string", short: "n" }
+      });
       const { dashboard } = await import("./dashboard.mjs");
-      return dashboard({ home, json: values.json });
+      return dashboard({ home, json: values.json, watch: values.watch, interval: values.interval ? Number(values.interval) : 5 });
     }
     case "status": return cmdStatus(rest, home);
     case "pickup": return cmdPickup(rest, home);
