@@ -38,8 +38,11 @@ done
 [ -n "${NO_COLOR:-}" ] && USE_COLOR=0
 
 if [ "$USE_COLOR" = 1 ]; then
+  # gray is a foreground colour (bright-black), NOT the ESC[2m "dim" attribute —
+  # some terminals render "dim" as a translucent dark overlay that reads as a
+  # second background layer.
   A=$'\033[38;5;39m'; OKC=$'\033[32m'; ERRC=$'\033[31m'; WRNC=$'\033[33m'
-  DIM=$'\033[2m'; B=$'\033[1m'; R=$'\033[0m'
+  DIM=$'\033[90m'; B=$'\033[1m'; R=$'\033[0m'
 else
   A=""; OKC=""; ERRC=""; WRNC=""; DIM=""; B=""; R=""
 fi
@@ -55,7 +58,12 @@ warn()    { line "!" "$WRNC" "$1" "${2:-}"; }
 bad()     { line "✗" "$ERRC" "$1" "${2:-}"; FAILED=1; }
 dry()     { line "→" "$A" "$1" "${2:+$2  }·  would"; }
 section() { printf '\n%s%s▸%s %s%s\n' "$A" "$B" "$R" "$B" "$1$R"; }
-note()    { printf '    %s%s%s\n' "$DIM" "$1" "$R"; }
+hint()    { printf '      %s%s%s\n' "$DIM" "$1" "$R"; }        # gray sub-line under a status
+snippet() {                                                    # literal block to read / copy
+  printf '\n'
+  while IFS= read -r _l; do printf '      %s│%s %s\n' "$A" "$R" "$_l"; done
+  printf '\n'
+}
 
 banner() {
   printf '\n  %s%s  Agent Handoff Protocol%s  %s· installer · v%s%s\n' "$A" "$B" "$R" "$DIM" "$VERSION" "$R"
@@ -174,9 +182,9 @@ case ":$PATH:" in
       printf '    add %sexport PATH="%s:$PATH"%s to %s now? [y/N] ' "$B" "$BIN_DIR" "$R" "$RC"
       read -r yn </dev/tty || yn=n
       case "$yn" in y|Y) printf '\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$RC"; ok "appended to shell rc" "$RC — open a new shell" ;;
-                    *) note "later: export PATH=\"$BIN_DIR:\$PATH\"" ;; esac
+                    *) hint "later: add  export PATH=\"$BIN_DIR:\$PATH\"  to your shell rc" ;; esac
     else
-      note "add to your shell rc: export PATH=\"$BIN_DIR:\$PATH\""
+      hint "add  export PATH=\"$BIN_DIR:\$PATH\"  to your shell rc"
     fi ;;
 esac
 
@@ -202,7 +210,7 @@ if [ -z "$MODE" ]; then
     "mcp|run ahp-mcp as an MCP server — the agent calls tools directly"
   case "$MENU_CHOICE" in 1) MODE=mcp ;; *) MODE=skill ;; esac
 fi
-printf '  %smode%s  %s%s%s\n' "$DIM" "$R" "$B" "$MODE" "$R"
+line "»" "$A" "mode" "$MODE"
 
 # ---- skill mode ----------------------------------------------------------
 install_skill() {
@@ -215,7 +223,7 @@ install_skill() {
       cp -R "$REPO/skills/claude-code/agent-handoff-protocol" "$CLAUDE_SKILL_DIR"
       if [ -f "$CLAUDE_SKILL_DIR/SKILL.md" ]; then
         ok "Claude Code skill" "$CLAUDE_SKILL_DIR"
-        note "$(grep -c . "$CLAUDE_SKILL_DIR/SKILL.md") lines · trigger: \"handoff\", \"pick up\", \"resume\""
+        hint "loads on: \"handoff\", \"pick up\", \"resume work\""
       else bad "skill copy failed" "$CLAUDE_SKILL_DIR"; fi
     fi
   else skip "Claude Code" "no ~/.claude — skipped"; fi
@@ -249,23 +257,26 @@ install_mcp() {
     else bad "claude mcp add failed" "add it by hand — see integrations/mcp.md"; fi
   else
     warn "Claude Code CLI" "not found — add to ~/.claude.json:"
-    note '{ "mcpServers": { "agent-handoff": { "command": "node", "args": ["'"$REPO"'/bin/ahp-mcp"] } } }'
+    snippet <<EOF
+{ "mcpServers": { "agent-handoff": { "command": "node", "args": ["$REPO/bin/ahp-mcp"] } } }
+EOF
   fi
 
   if [ "$HAS_CODEX" = 1 ] || [ -d "$HOME/.codex" ]; then
-    note "Codex — add to ~/.codex/config.toml:"
-    note "  [mcp_servers.agent-handoff]"
-    note "  command = \"node\""
-    note "  args = [\"$REPO/bin/ahp-mcp\"]"
+    warn "Codex" "not auto-configured — add to ~/.codex/config.toml:"
+    snippet <<EOF
+[mcp_servers.agent-handoff]
+command = "node"
+args = ["$REPO/bin/ahp-mcp"]
+EOF
   fi
 
   if [ "$DRY" != 1 ]; then
     if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
       | node "$REPO/bin/ahp-mcp" 2>/dev/null | grep -q '"serverInfo"'; then
-      ok "MCP server self-test" "initialize handshake OK"
+      ok "MCP server self-test" "initialize handshake OK · 8 tools"
     else bad "MCP server self-test failed"; fi
   fi
-  note "tools: ahp_status ahp_pickup ahp_start ahp_intent_open ahp_intent_promote ahp_end ahp_read ahp_verify"
 }
 
 case "$MODE" in
