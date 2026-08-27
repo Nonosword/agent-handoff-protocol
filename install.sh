@@ -297,9 +297,14 @@ if [ "$FAILED" = 1 ]; then
   printf '  %s%s✗ finished with errors%s — see the ✗ lines above.\n\n' "$ERRC" "$B" "$R"
   exit 1
 fi
-printf '  %s%s✓ installed%s  (mode: %s%s%s)\n\n' "$OKC" "$B" "$R" "$B" "$MODE" "$R"
-printf '  Try it:\n'
-printf '    %scd <a git repo>%s\n' "$DIM" "$R"
-printf '    %sahp status%s        %s# where things stand%s\n' "$B" "$R" "$DIM" "$R"
-printf '    %sahp pickup%s        %s# before you start work%s\n' "$B" "$R" "$DIM" "$R"
-printf '\n  Docs: %s/SPEC.md · %s/docs/adoption.md\n\n' "$REPO" "$REPO"
+printf '  %s%s✓ installed%s  (mode: %s%s%s)\n' "$OKC" "$B" "$R" "$B" "$MODE" "$R"
+
+printf '\n  %sTry it%s   %sfrom inside any git repo%s\n' "$B" "$R" "$DIM" "$R"
+printf '    %s%-14s%s %swhere things stand%s\n' "$B" "ahp status" "$R" "$DIM" "$R"
+printf '    %s%-14s%s %sbefore you start work%s\n' "$B" "ahp pickup" "$R" "$DIM" "$R"
+
+printf '\n  %sDocs%s\n' "$B" "$R"
+printf '    %s%-18s%s %s\n' "$DIM" "the protocol" "$R" "$REPO/SPEC.md"
+printf '    %s%-18s%s %s\n' "$DIM" "adopting it" "$R" "$REPO/docs/adoption.md"
+printf '    %s%-18s%s %s\n' "$DIM" "rationale & FAQ" "$R" "$REPO/docs/rationale.md"
+printf '\n'
