@@ -146,10 +146,14 @@ if [ "$UNINSTALL" = 1 ]; then
   else skip "Codex snippet not present"; fi
   for cli in claude codex; do
     command -v "$cli" >/dev/null 2>&1 || continue
-    if [ "$DRY" = 1 ]; then dry "remove MCP registration" "$cli mcp remove agent-handoff"
-    elif "$cli" mcp get agent-handoff >/dev/null 2>&1; then
-      "$cli" mcp remove agent-handoff >/dev/null 2>&1 && ok "removed MCP registration" "$cli"
-    else skip "no MCP registration" "$cli"; fi
+    if [ "$DRY" = 1 ]; then dry "remove MCP registration" "$cli mcp remove agent-handoff"; continue; fi
+    "$cli" mcp get agent-handoff >/dev/null 2>&1 || { skip "no MCP registration" "$cli"; continue; }
+    removed=0
+    for s in "" "-s user" "-s local" "-s project"; do
+      # shellcheck disable=SC2086
+      "$cli" mcp remove agent-handoff $s >/dev/null 2>&1 && { removed=1; break; }
+    done
+    [ "$removed" = 1 ] && ok "removed MCP registration" "$cli" || warn "MCP remove failed" "$cli mcp remove agent-handoff"
   done
   printf '\n  %sThe store at %s was left intact.%s\n\n' "$DIM" "$STORE" "$R"
   exit 0
@@ -248,25 +252,40 @@ install_skill() {
 }
 
 # ---- mcp mode ----------------------------------------------------------
-# Register with each host's own MCP CLI (idempotent, edits the host's config
-# safely). Fall back to a copy-paste snippet only when the CLI is absent.
-register_host() {  # register_host <host-label> <cli-name>
-  local host="$1" cli="$2"
-  if [ "$DRY" = 1 ]; then dry "register with $host" "$cli mcp add agent-handoff -- node …/ahp-mcp"; return 0; fi
-  if command -v "$cli" >/dev/null 2>&1; then
-    if "$cli" mcp add agent-handoff -- node "$REPO/bin/ahp-mcp" >/dev/null 2>&1; then
-      ok "registered with $host" "restart $host to load it"
-      "$cli" mcp get agent-handoff >/dev/null 2>&1 && ok "$host entry confirmed" "$cli mcp get agent-handoff"
-    else bad "$cli mcp add failed" "see integrations/mcp.md"; fi
+# Register with each host's own MCP CLI. Returns 1 only when the CLI is absent
+# (so the caller shows a copy-paste fallback). Extra args after the cli name are
+# passed to `mcp add` (e.g. --scope user for Claude Code, whose default is a
+# directory-local entry).
+register_host() {
+  local host="$1" cli="$2"; shift 2
+  if [ "$DRY" = 1 ]; then dry "register with $host" "$cli mcp add $* agent-handoff -- node …/ahp-mcp"; return 0; fi
+  command -v "$cli" >/dev/null 2>&1 || return 1
+
+  if "$cli" mcp get agent-handoff >/dev/null 2>&1; then
+    local sc scl; sc=$("$cli" mcp get agent-handoff 2>/dev/null | sed -n 's/.*[Ss]cope:[[:space:]]*//p' | head -1)
+    scl=$(printf '%s' "${sc%% *}" | tr 'A-Z' 'a-z')
+    case "$scl" in
+      user|global|"") skip "$host MCP entry" "already registered" ;;
+      *) warn "$host MCP entry" "registered at ${scl} scope — active only there"
+         hint "make it machine-wide:  $cli mcp remove agent-handoff -s ${scl}  &&  re-run this installer" ;;
+    esac
+    return 0
+  fi
+
+  local out
+  if out=$("$cli" mcp add "$@" agent-handoff -- node "$REPO/bin/ahp-mcp" 2>&1); then
+    ok "registered with $host" "restart $host to load it"
+    "$cli" mcp get agent-handoff >/dev/null 2>&1 && ok "$host entry confirmed" "$cli mcp get agent-handoff"
   else
-    return 1
+    bad "$cli mcp add failed" "$(printf '%s' "$out" | grep -v '^[[:space:]]*$' | head -1)"
+    hint "add it by hand — see integrations/mcp.md"
   fi
 }
 
 install_mcp() {
   section "MCP server"
 
-  register_host "Claude Code" claude || {
+  register_host "Claude Code" claude --scope user || {
     warn "Claude Code CLI" "not found — add to ~/.claude.json by hand:"
     snippet <<EOF
 { "mcpServers": { "agent-handoff": { "command": "node", "args": ["$REPO/bin/ahp-mcp"] } } }
