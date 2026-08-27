@@ -144,9 +144,13 @@ if [ "$UNINSTALL" = 1 ]; then
       ok "stripped Codex AGENTS.md block" "$CODEX_AGENTS"
     fi
   else skip "Codex snippet not present"; fi
-  if command -v claude >/dev/null 2>&1; then
-    [ "$DRY" = 1 ] && dry "remove MCP registration" "claude mcp remove agent-handoff" || { claude mcp remove agent-handoff >/dev/null 2>&1 && ok "removed MCP registration" "claude" || skip "no MCP registration in claude"; }
-  fi
+  for cli in claude codex; do
+    command -v "$cli" >/dev/null 2>&1 || continue
+    if [ "$DRY" = 1 ]; then dry "remove MCP registration" "$cli mcp remove agent-handoff"
+    elif "$cli" mcp get agent-handoff >/dev/null 2>&1; then
+      "$cli" mcp remove agent-handoff >/dev/null 2>&1 && ok "removed MCP registration" "$cli"
+    else skip "no MCP registration" "$cli"; fi
+  done
   printf '\n  %sThe store at %s was left intact.%s\n\n' "$DIM" "$STORE" "$R"
   exit 0
 fi
@@ -244,32 +248,41 @@ install_skill() {
 }
 
 # ---- mcp mode ----------------------------------------------------------
+# Register with each host's own MCP CLI (idempotent, edits the host's config
+# safely). Fall back to a copy-paste snippet only when the CLI is absent.
+register_host() {  # register_host <host-label> <cli-name>
+  local host="$1" cli="$2"
+  if [ "$DRY" = 1 ]; then dry "register with $host" "$cli mcp add agent-handoff -- node …/ahp-mcp"; return 0; fi
+  if command -v "$cli" >/dev/null 2>&1; then
+    if "$cli" mcp add agent-handoff -- node "$REPO/bin/ahp-mcp" >/dev/null 2>&1; then
+      ok "registered with $host" "restart $host to load it"
+      "$cli" mcp get agent-handoff >/dev/null 2>&1 && ok "$host entry confirmed" "$cli mcp get agent-handoff"
+    else bad "$cli mcp add failed" "see integrations/mcp.md"; fi
+  else
+    return 1
+  fi
+}
+
 install_mcp() {
   section "MCP server"
-  if [ "$DRY" = 1 ]; then
-    dry "register with Claude Code" "claude mcp add agent-handoff -- node $REPO/bin/ahp-mcp"
-  elif [ "$HAS_CLAUDE" = 1 ]; then
-    if claude mcp add agent-handoff -- node "$REPO/bin/ahp-mcp" >/dev/null 2>&1; then
-      ok "registered with Claude Code" "restart Claude Code to load it"
-      if claude mcp get agent-handoff >/dev/null 2>&1; then ok "MCP entry confirmed" "claude mcp get agent-handoff"; fi
-    elif claude mcp get agent-handoff >/dev/null 2>&1; then
-      skip "Claude Code MCP entry" "already registered"
-    else bad "claude mcp add failed" "add it by hand — see integrations/mcp.md"; fi
-  else
-    warn "Claude Code CLI" "not found — add to ~/.claude.json:"
+
+  register_host "Claude Code" claude || {
+    warn "Claude Code CLI" "not found — add to ~/.claude.json by hand:"
     snippet <<EOF
 { "mcpServers": { "agent-handoff": { "command": "node", "args": ["$REPO/bin/ahp-mcp"] } } }
 EOF
-  fi
+  }
 
-  if [ "$HAS_CODEX" = 1 ] || [ -d "$HOME/.codex" ]; then
-    warn "Codex" "not auto-configured — add to ~/.codex/config.toml:"
-    snippet <<EOF
+  register_host "Codex" codex || {
+    [ -d "$HOME/.codex" ] && {
+      warn "Codex CLI" "not found — add to ~/.codex/config.toml by hand:"
+      snippet <<EOF
 [mcp_servers.agent-handoff]
 command = "node"
 args = ["$REPO/bin/ahp-mcp"]
 EOF
-  fi
+    }
+  }
 
   if [ "$DRY" != 1 ]; then
     if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \

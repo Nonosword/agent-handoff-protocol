@@ -27,9 +27,11 @@ The protocol becomes storage-location-agnostic and ships a real CLI.
   report (every action logs a line; TUI-style sections and status markers) and an
   arrow-key mode picker. Symlinks the CLIs and verifies each runs, creates and
   probes the store, detects `claude` / `codex`, then either deploys the Claude
-  Code skill + Codex `AGENTS.md` snippet or registers + self-tests the MCP
-  server, offers to add the bin dir to your shell rc, and finishes with a
-  self-test. `--mode`, `--dry-run`, `--no-color`, `--uninstall`.
+  Code skill + Codex `AGENTS.md` snippet, or registers the MCP server with
+  **both hosts via `claude mcp add` / `codex mcp add`** (idempotent, confirmed
+  with `… mcp get`) and self-tests it. Offers to add the bin dir to your shell
+  rc; finishes with a self-test. `--mode`, `--dry-run`, `--no-color`,
+  `--uninstall` (which also runs `… mcp remove`).
 - **Claude Code skill** (`skills/claude-code/agent-handoff-protocol/`).
 - **Per-project write lock** with stale-lock reclaim; `fsync` on every append.
 - End-to-end test suite (`test/run.mjs`).

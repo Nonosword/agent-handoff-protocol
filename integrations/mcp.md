@@ -4,27 +4,36 @@
 exposes the worklog as tools so an agent uses them directly instead of shelling
 out.
 
-`install.sh` option B registers this for whichever host it detects. To wire it up
-by hand:
+`install.sh` (mcp mode) registers this automatically with each host it detects,
+using that host's own MCP CLI:
 
-## Claude Code
-
-`~/.claude.json` (global) or a project `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "agent-handoff": {
-      "command": "node",
-      "args": ["<REPO>/bin/ahp-mcp"]
-    }
-  }
-}
+```sh
+claude mcp add agent-handoff -- node <REPO>/bin/ahp-mcp
+codex  mcp add agent-handoff -- node <REPO>/bin/ahp-mcp
 ```
 
-Replace `<REPO>` with the absolute path to your clone (install.sh fills it in).
-Restart Claude Code; the tools appear as `ahp_status`, `ahp_pickup`, `ahp_start`,
-`ahp_intent_open`, `ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`.
+Both are idempotent and edit the host's config safely; `<REPO>` is the absolute
+path to your clone. Restart the host to load the server. Remove with
+`<host> mcp remove agent-handoff`.
+
+## By hand
+
+**Claude Code** — `~/.claude.json` (global) or a project `.mcp.json`:
+
+```json
+{ "mcpServers": { "agent-handoff": { "command": "node", "args": ["<REPO>/bin/ahp-mcp"] } } }
+```
+
+**Codex** — `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.agent-handoff]
+command = "node"
+args = ["<REPO>/bin/ahp-mcp"]
+```
+
+The tools appear as `ahp_status`, `ahp_pickup`, `ahp_start`, `ahp_intent_open`,
+`ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`.
 
 ## Any MCP host
 
