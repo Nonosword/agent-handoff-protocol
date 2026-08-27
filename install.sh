@@ -66,13 +66,17 @@ banner() {
 }
 
 # arrow-key menu -> $MENU_CHOICE (0-based). Falls back to a numbered prompt.
+# Each option is "LABEL|DESCRIPTION". The label is a fixed one-line row; the
+# description of the selected option is shown below and may wrap freely — the
+# redraw erases to end-of-screen so a wrapped description stays one unit.
 menu() {
   local title="$1"; shift
   local opts=("$@") n=${#opts[@]} sel=0 key
   printf '\n%s%s%s\n' "$B" "$title" "$R"
+
   if [ ! -t 0 ] || [ ! -t 1 ]; then
     local i=1
-    for o in "${opts[@]}"; do printf '  %d) %s\n' "$i" "${o%%|*}"; i=$((i+1)); done
+    for o in "${opts[@]}"; do printf '  %d) %s — %s\n' "$i" "${o%%|*}" "${o#*|}"; i=$((i+1)); done
     printf 'choose [1-%d]: ' "$n"
     read -r sel </dev/tty 2>/dev/null || sel=1
     case "$sel" in ''|*[!0-9]*) sel=1 ;; esac
@@ -80,18 +84,21 @@ menu() {
     MENU_CHOICE=$((sel - 1))
     return
   fi
+
+  # A wrapped description stays one logical unit: we save the cursor at the top
+  # of the block and, on every redraw, restore to it and erase to end of screen
+  # — so no line-count arithmetic and wrapping is handled by the terminal.
   _render() {
     local i
     for i in $(seq 0 $((n-1))); do
-      local L="${opts[$i]%%|*}" D="${opts[$i]#*|}"
-      if [ "$i" -eq "$sel" ]; then
-        printf '  %s%s❯ %-6s%s %s%s%s\n' "$A" "$B" "$L" "$R" "$DIM" "$D" "$R"
-      else
-        printf '    %-6s %s%s%s\n' "$L" "$DIM" "$D" "$R"
-      fi
+      local L="${opts[$i]%%|*}"
+      if [ "$i" -eq "$sel" ]; then printf '  %s%s❯ %s%s\n' "$A" "$B" "$L" "$R"
+      else printf '    %s\n' "$L"; fi
     done
+    printf '    %s%s%s\n' "$DIM" "${opts[$sel]#*|}" "$R"
   }
-  printf '%s' $'\033[?25l'
+
+  printf '%s' $'\033[?25l\033[s'
   _render
   while true; do
     IFS= read -rsn1 key </dev/tty
@@ -103,7 +110,8 @@ menu() {
       [1-9]) [ "$key" -le "$n" ] && { sel=$((key-1)); break; } ;;
       "") break ;;
     esac
-    printf '\033[%dA' "$n"; _render
+    printf '\033[u\033[J'
+    _render
   done
   printf '%s' $'\033[?25h'
   MENU_CHOICE=$sel
