@@ -67,7 +67,7 @@ cd ~/Repositories/agent-handoff-protocol
 两者都装时，agent 优先用 MCP 工具，没有则回退到 CLI。`./install.sh --mode cli|mcp`
 跳过询问 · `--dry-run` · `--no-color` · `--uninstall`。
 
-需要 Node ≥ 18.17 和 Git。
+需要 Node ≥ 20 和 Git。
 
 ## 使用
 

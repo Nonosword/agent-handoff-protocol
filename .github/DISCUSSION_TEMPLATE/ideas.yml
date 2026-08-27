@@ -1,0 +1,33 @@
+labels: []
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: One or two paragraphs. What would change, from a user's point of view.
+    validations:
+      required: true
+
+  - type: textarea
+    id: who
+    attributes:
+      label: Who it helps, and when
+      description: A concrete situation where the current behaviour is not enough.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: touches-protocol
+    attributes:
+      label: Does it touch the protocol
+      description: Record shape or required procedure (SPEC §4–§9 / the schema)?
+      options:
+        - "No — CLI / MCP / install / docs only"
+        - "Maybe — not sure yet"
+        - "Yes — it would change records or procedure"
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: "If it's a firm proposal that changes the protocol, open a **Protocol change proposal** issue."

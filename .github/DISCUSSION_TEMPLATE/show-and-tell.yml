@@ -1,0 +1,30 @@
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        How you're running AHP — the agent mix, the rotation, what worked, what didn't.
+        Anonymised worklog excerpts are welcome and may become an `examples/` entry.
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Your setup
+      description: Which agents, on how many machines, stdio or networked, what kind of projects.
+    validations:
+      required: true
+
+  - type: textarea
+    id: how-it-went
+    attributes:
+      label: How it went
+      description: Did the agents follow the protocol? Where did it help? Where was it friction?
+    validations:
+      required: true
+
+  - type: textarea
+    id: worklog
+    attributes:
+      label: Worklog excerpt (optional)
+      description: A few sessions of `ahp log` output. **Redact** repo names, paths, secrets.
+      render: text

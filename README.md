@@ -76,7 +76,7 @@ tools:
 An agent with both prefers the MCP tools and falls back to the CLI. `./install.sh
 --mode cli|mcp` skips the prompt · `--dry-run` · `--no-color` · `--uninstall`.
 
-Requires Node ≥ 18.17 and Git.
+Requires Node ≥ 20 and Git.
 
 ## Use it
 

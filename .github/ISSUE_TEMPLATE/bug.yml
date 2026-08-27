@@ -1,0 +1,76 @@
+name: Bug report
+description: A defect in the ahp CLI, the MCP server, install.sh, or the validator
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a question or "is this expected?", use
+        [Discussions → Q&A](https://github.com/Nonosword/agent-handoff-protocol/discussions/categories/q-a) instead.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead. Paste short error text verbatim.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The minimal sequence. A tiny throwaway repo is ideal.
+      placeholder: |
+        1. cd into a git repo
+        2. ahp start --plan "…" --gate pass
+        3. …
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: ahp version
+      description: Output of `ahp --version` (or the commit SHA if running from a clone).
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: How were you using it
+      options:
+        - ahp CLI directly
+        - MCP tools (stdio)
+        - MCP tools (networked / hub)
+        - install.sh
+        - tools/verify-worklog.mjs
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Node version (`node -v`), and the agent host if relevant (Codex / Claude Code / Cursor / …).
+      placeholder: "macOS 15, node v20.11, Codex"
+    validations:
+      required: true
+
+  - type: textarea
+    id: verify
+    attributes:
+      label: "`ahp verify` output"
+      description: Run `ahp verify` in the affected project and paste the result. Skip if not applicable.
+      render: text
+
+  - type: textarea
+    id: worklog
+    attributes:
+      label: Relevant worklog lines (optional)
+      description: |
+        A few lines from `.coworker/worklog.jsonl` or the central store around the problem.
+        **Redact** any secrets, tokens, customer data, or absolute machine paths.
+      render: json

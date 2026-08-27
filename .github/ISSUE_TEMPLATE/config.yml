@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question / help
+    url: https://github.com/Nonosword/agent-handoff-protocol/discussions/categories/q-a
+    about: How do I…, why does…, is this expected — ask in Discussions.
+  - name: Idea / feature discussion
+    url: https://github.com/Nonosword/agent-handoff-protocol/discussions/categories/ideas
+    about: Float an idea before it's a concrete proposal.
+  - name: The protocol (SPEC.md)
+    url: https://github.com/Nonosword/agent-handoff-protocol/blob/main/SPEC.md
+    about: The normative record format and procedures.

@@ -10,7 +10,7 @@ examples, integrations and tooling is low.
 | --- | --- |
 | `SPEC.md` | the normative protocol |
 | `schema/worklog.schema.json` | machine contract for one record |
-| `src/` | the `ahp` CLI + `ahp-mcp` server (zero runtime deps, Node ≥ 18.17) |
+| `src/` | the `ahp` CLI + `ahp-mcp` server (zero runtime deps, Node ≥ 20) |
 | `bin/` | entry points |
 | `tools/` | standalone file validator, schema check |
 | `skills/`, `integrations/` | how agents reach `ahp` |

@@ -1,0 +1,36 @@
+name: Integration request
+description: Support for another agent / harness
+labels: ["integration"]
+body:
+  - type: input
+    id: host
+    attributes:
+      label: Agent / harness
+      description: Name and a link to its docs.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mechanism
+    attributes:
+      label: How would it reach ahp
+      options:
+        - "MCP client (stdio)"
+        - "MCP client (HTTP)"
+        - "shell — it can run the `ahp` CLI"
+        - "both MCP and shell"
+        - "not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: instructions-file
+    attributes:
+      label: Its instructions file
+      description: What file does it read on startup for project rules (e.g. `CLAUDE.md`, `AGENTS.md`, `.cursorrules`)?
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Quirks — how it surfaces tools, whether it sets a `clientInfo` name, sandbox behaviour, etc.

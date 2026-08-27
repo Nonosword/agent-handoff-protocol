@@ -19,4 +19,4 @@
 
 - [ ] `npm test` passes
 - [ ] `npm run verify:examples` passes
-- [ ] `./install.sh --mode skill --dry-run` runs clean
+- [ ] `./install.sh --mode cli --dry-run` runs clean

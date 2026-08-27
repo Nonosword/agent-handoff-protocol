@@ -1,0 +1,57 @@
+name: Protocol change proposal
+description: A change to SPEC.md §4–§9 or schema/worklog.schema.json
+labels: ["protocol"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The bar here is high — record shape and required procedure are what make a
+        worklog portable. If you're not sure yet, start in
+        [Discussions → Ideas](https://github.com/Nonosword/agent-handoff-protocol/discussions/categories/ideas).
+
+  - type: textarea
+    id: what
+    attributes:
+      label: The change
+      description: Which section of SPEC.md, or which part of the schema, and what it would become.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The concrete problem it solves. A real worklog / rotation where the current design falls short.
+    validations:
+      required: true
+
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration story
+      description: What happens to worklogs written under the current rules? Can a validator accept both?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: semver
+    attributes:
+      label: SemVer impact
+      options:
+        - "patch — clarification, no behaviour change"
+        - "minor — additive, old worklogs still valid"
+        - "major — breaking record/procedure change"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: A PR for this would update, together
+      options:
+        - label: "SPEC.md"
+        - label: "schema/worklog.schema.json"
+        - label: "src/validate.mjs"
+        - label: "tools/verify-worklog.mjs"
+        - label: "examples/"
+        - label: "CHANGELOG.md + version bump"

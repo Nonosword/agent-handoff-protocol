@@ -1,0 +1,35 @@
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: "For a reproducible defect, open a **Bug report** issue instead."
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do
+      description: The outcome you want, not just the command that failed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you've tried
+      description: Commands run, docs read, what you expected vs what happened.
+    validations:
+      required: true
+
+  - type: input
+    id: setup
+    attributes:
+      label: Setup
+      description: "`ahp --version`, agent host, stdio or networked, OS."
+      placeholder: "0.2.0, Claude Code, stdio, Linux"
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: "`ahp status` / `ahp verify` / the tool response. Redact secrets and absolute paths."
+      render: text
