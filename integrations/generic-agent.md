@@ -10,6 +10,9 @@ CONTINUITY — this workspace uses the Agent Handoff Protocol. The worklog lives
 outside the repo, in a central store keyed by the repo's Git identity. `ahp`
 manages it; the repo is never touched.
 
+If `ahp_*` MCP tools are available, prefer them over the `ahp` shell commands
+(structured args, no quoting of the free-text fields). `ahp <verb>` ↔ `ahp_<verb>`.
+
 At the start of a session, before editing anything:
   1. Run `ahp pickup`. It shows the last handoff, the commits since its base,
      which are accounted for, and any OPEN INTENTS (declared work not yet

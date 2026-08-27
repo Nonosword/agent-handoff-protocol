@@ -1,10 +1,11 @@
 # MCP server
 
 `ahp-mcp` speaks the Model Context Protocol over stdio (zero dependencies). It
-exposes the worklog as tools so an agent uses them directly instead of shelling
-out.
+exposes the worklog as tools so an agent calls them directly instead of shelling
+out — the free-text fields go as structured strings, not through shell quoting.
+The skill / `AGENTS.md` snippet tell agents to prefer these tools when present.
 
-`install.sh` (mcp mode) registers this automatically with each host it detects,
+`install.sh --mode mcp` registers this automatically with each host it detects,
 using that host's own MCP CLI:
 
 ```sh

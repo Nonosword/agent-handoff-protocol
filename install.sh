@@ -2,11 +2,14 @@
 # Agent Handoff Protocol — installer.
 #
 #   ./install.sh                 interactive (arrow keys)
-#   ./install.sh --mode skill    CLI + Claude Code skill + Codex AGENTS.md snippet
-#   ./install.sh --mode mcp      CLI + MCP server registered with detected hosts
+#   ./install.sh --mode cli      CLI + skill + Codex AGENTS.md snippet
+#   ./install.sh --mode mcp      the above, plus the MCP server (recommended)
 #   ./install.sh --uninstall     remove what this installed (the store is kept)
 #   ./install.sh --dry-run       show every action, change nothing
 #   ./install.sh --no-color      plain output
+#
+# The skill / AGENTS.md snippet (the workflow) are always deployed; the mode
+# only decides whether agents also get native ahp_* tools via the MCP server.
 
 set -u
 
@@ -29,7 +32,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --no-color) USE_COLOR=0; shift ;;
-    -h|--help) sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1"; exit 2 ;;
   esac
 done
@@ -213,16 +216,17 @@ HAS_CODEX=0;  command -v codex  >/dev/null 2>&1 && HAS_CODEX=1
 [ "$HAS_CODEX" = 1 ]  && ok "codex"  "$(codex --version 2>/dev/null | head -1)"  || skip "codex" "not found"
 
 if [ -z "$MODE" ]; then
-  menu "How should your agents reach ahp?" \
-    "skill|Claude Code skill + Codex AGENTS.md snippet — the agent runs the ahp CLI" \
-    "mcp|run ahp-mcp as an MCP server — the agent calls tools directly"
-  case "$MENU_CHOICE" in 1) MODE=mcp ;; *) MODE=skill ;; esac
+  menu "How should agents call ahp?" \
+    "cli + mcp|also expose native ahp_* tools via an MCP server  (recommended)" \
+    "cli|just the ahp CLI — the skill / AGENTS.md snippet teach the workflow"
+  case "$MENU_CHOICE" in 1) MODE=cli ;; *) MODE=mcp ;; esac
 fi
+case "$MODE" in skill) MODE=cli ;; esac  # accept the old name
 line "»" "$A" "mode" "$MODE"
 
-# ---- skill mode ----------------------------------------------------------
-install_skill() {
-  section "Skill deployment"
+# ---- the workflow: skill + AGENTS.md snippet, always deployed ----------
+install_procedure() {
+  section "Workflow"
   if [ "$HAS_CLAUDE" = 1 ] || [ -d "$HOME/.claude" ]; then
     if [ "$DRY" = 1 ]; then dry "install Claude Code skill" "$CLAUDE_SKILL_DIR"
     else
@@ -312,10 +316,10 @@ EOF
 }
 
 case "$MODE" in
-  skill) install_skill ;;
-  mcp)   install_mcp ;;
-  *) printf '\n  %sunknown --mode: %s (skill | mcp)%s\n\n' "$ERRC" "$MODE" "$R"; exit 2 ;;
+  cli|mcp) install_procedure ;;
+  *) printf '\n  %sunknown --mode: %s (cli | mcp)%s\n\n' "$ERRC" "$MODE" "$R"; exit 2 ;;
 esac
+[ "$MODE" = mcp ] && install_mcp
 
 # ---- self-test + summary ---------------------------------------------
 if [ "$DRY" != 1 ]; then

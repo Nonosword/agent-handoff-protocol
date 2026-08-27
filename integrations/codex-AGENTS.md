@@ -6,8 +6,12 @@ a project's `AGENTS.md` instead if you want it per-project.
 ```markdown
 ## Agent Handoff Protocol
 
-Session continuity across agent rotations. The `ahp` CLI keeps an append-only
-worklog in a central store outside this repo — the repo is never modified.
+Session continuity across agent rotations. An append-only worklog in a central
+store outside this repo — the repo is never modified.
+
+If the `ahp_*` MCP tools are available this session, use those (structured
+arguments, no shell quoting of the free-text fields). Otherwise use the `ahp`
+CLI below. Same steps, same order; `ahp <verb>` maps to the `ahp_<verb>` tool.
 
 BEFORE the first change this session:
   ahp pickup

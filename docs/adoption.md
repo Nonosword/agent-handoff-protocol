@@ -7,9 +7,11 @@ git clone https://github.com/Nonosword/agent-handoff-protocol ~/Repositories/age
 cd ~/Repositories/agent-handoff-protocol && ./install.sh
 ```
 
-Pick **skill** (agents run the `ahp` CLI) or **mcp** (agents call tools). Nothing
-is written into any project you work on — the worklog lives in
-`$XDG_DATA_HOME/agent-handoff/`, one file per project.
+The workflow (Claude Code skill + Codex `AGENTS.md` snippet) is always deployed.
+The mode choice — **cli** or **mcp** *(recommended)* — only decides whether
+agents also get native `ahp_*` tools via an MCP server. Nothing is written into
+any project you work on; the worklog lives in `$XDG_DATA_HOME/agent-handoff/`,
+one file per project.
 
 ## Per project — nothing to do
 
@@ -23,14 +25,14 @@ tarball), that's a valid layout too — see [SPEC §4.3](../SPEC.md). Add
 
 ## Tell your agents
 
-**skill mode** installed a Claude Code skill and/or a Codex `AGENTS.md` block —
-agents pick it up automatically. For another harness, paste
+The install deployed a Claude Code skill and/or a Codex `AGENTS.md` block —
+agents pick those up automatically. For another harness, paste
 [`integrations/generic-agent.md`](../integrations/generic-agent.md) into its rules
 file.
 
-**mcp mode** registered the server. Add one line to the agent's instructions:
-*"At session start call `ahp_pickup`, reconcile, then `ahp_start`. One
-`ahp_intent_open` / `ahp_intent_promote` per commit. `ahp_end` when stopping."*
+All three carry the same guidance: **if the `ahp_*` MCP tools are present, use
+them; otherwise run the `ahp` CLI.** So an agent with both installed prefers the
+structured MCP path and falls back to the shell.
 
 ## Worker identity
 

@@ -10,12 +10,22 @@ description: >-
 
 # Agent Handoff Protocol
 
-The `ahp` CLI stores an append-only worklog in a central store (outside your
-project repo), one file per project, keyed by the project's Git identity. Your
-repository is never modified.
+An append-only worklog in a central store outside your project repo, one file per
+project, keyed by the project's Git identity. Your repository is never modified.
 
-If `ahp` is not on PATH, it is at `~/.local/share/agent-handoff/` install docs —
-tell the user to run the project's `install.sh`.
+## Which interface
+
+If the `ahp_*` MCP tools are available this session (`ahp_pickup`, `ahp_start`,
+`ahp_intent_open`, `ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`),
+**use those** — the free-text fields (`actual`, `landmines`, `summary`, `plan`)
+are passed as structured strings instead of through shell quoting.
+
+Otherwise run the `ahp` CLI shown below. If `ahp` is not on PATH, tell the user
+to run the project's `install.sh`.
+
+Either way the steps and their order are the same. Below, each CLI command maps
+to the same-named MCP tool (`ahp start …` → `ahp_start`, `ahp intent promote …`
+→ `ahp_intent_promote`).
 
 ## At the start of a session — PICKUP (do this before any change)
 

@@ -56,13 +56,16 @@ cd ~/Repositories/agent-handoff-protocol
 ```
 
 安装脚本会分步骤逐条报告——把 `ahp` / `ahp-mcp` 软链到 PATH 并验证能跑、创建并探测 store、
-检测 `claude` 和 `codex` 是否安装，然后（方向键选择）问你 agent 用哪种方式接入：
+部署**工作流**（Claude Code skill + Codex `AGENTS.md` 片段），然后（方向键选择）问你 agent
+要不要额外获得原生 `ahp_*` 工具：
 
-- **skill** —— 把 Claude Code skill 部署到 `~/.claude/skills/`，并追加 Codex 的 `AGENTS.md` 片段。
-  agent 直接跑 `ahp` CLI。
-- **mcp** —— 把 `ahp-mcp` 注册为 MCP server。agent 直接调工具（`ahp_pickup`、`ahp_start` ……）。
+- **cli** —— agent 跑 `ahp` CLI；skill / 片段负责教流程。
+- **mcp**（推荐）—— 以上全部，外加把 `ahp-mcp` 通过 `claude mcp add` / `codex mcp add`
+  注册给每个检测到的 host，agent 直接调 `ahp_pickup`、`ahp_start` ……。结构化参数，
+  自由文本字段不用过 shell 转义。
 
-`./install.sh --mode skill|mcp` 跳过询问 · `--dry-run` · `--uninstall`。
+两者都装时，agent 优先用 MCP 工具，没有则回退到 CLI。`./install.sh --mode cli|mcp`
+跳过询问 · `--dry-run` · `--no-color` · `--uninstall`。
 
 需要 Node ≥ 18.17 和 Git。
 

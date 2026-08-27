@@ -63,15 +63,18 @@ cd ~/Repositories/agent-handoff-protocol
 
 The installer walks through it with a step-by-step report — symlinks the
 `ahp` / `ahp-mcp` CLIs onto your PATH and checks each runs, creates and probes
-the store, detects whether `claude` and `codex` are installed, then (arrow keys)
-asks how your agents should reach `ahp`:
+the store, deploys the **workflow** (the Claude Code skill + Codex `AGENTS.md`
+snippet), then (arrow keys) asks whether agents should also get native `ahp_*`
+tools:
 
-- **skill** — deploys the Claude Code skill to `~/.claude/skills/` and appends
-  the Codex `AGENTS.md` snippet. Agents run the `ahp` CLI.
-- **mcp** — registers `ahp-mcp` as an MCP server with the detected hosts. Agents
-  call tools (`ahp_pickup`, `ahp_start`, …) directly.
+- **cli** — agents run the `ahp` CLI; the skill / snippet teach the sequence.
+- **mcp** *(recommended)* — the above, plus `ahp-mcp` registered as an MCP
+  server with each detected host (`claude mcp add` / `codex mcp add`), so agents
+  call `ahp_pickup`, `ahp_start`, … directly. Structured arguments — no shell
+  quoting of the free-text fields.
 
-`./install.sh --mode skill|mcp` to skip the prompt · `--dry-run` · `--uninstall`.
+An agent with both prefers the MCP tools and falls back to the CLI. `./install.sh
+--mode cli|mcp` skips the prompt · `--dry-run` · `--no-color` · `--uninstall`.
 
 Requires Node ≥ 18.17 and Git.
 

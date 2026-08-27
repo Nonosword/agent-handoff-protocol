@@ -26,12 +26,16 @@ The protocol becomes storage-location-agnostic and ships a real CLI.
 - **`install.sh`** — one-command deploy with a structured, coloured, step-by-step
   report (every action logs a line; TUI-style sections and status markers) and an
   arrow-key mode picker. Symlinks the CLIs and verifies each runs, creates and
-  probes the store, detects `claude` / `codex`, then either deploys the Claude
-  Code skill + Codex `AGENTS.md` snippet, or registers the MCP server with
-  **both hosts via `claude mcp add` / `codex mcp add`** (idempotent, confirmed
-  with `… mcp get`) and self-tests it. Offers to add the bin dir to your shell
-  rc; finishes with a self-test. `--mode`, `--dry-run`, `--no-color`,
-  `--uninstall` (which also runs `… mcp remove`).
+  probes the store, **always deploys the workflow** (Claude Code skill + Codex
+  `AGENTS.md` snippet), then in `mcp` mode also registers the MCP server with
+  **each host via `claude mcp add --scope user` / `codex mcp add`** (idempotent,
+  confirmed with `… mcp get`, warns on a pre-existing local/project-scoped
+  entry) and self-tests it. Offers to add the bin dir to your shell rc; finishes
+  with a self-test. `--mode cli|mcp`, `--dry-run`, `--no-color`, `--uninstall`
+  (which also runs `… mcp remove` at every scope).
+- **Interface preference** — the skill, the Codex snippet and the generic
+  prompt all tell an agent: if the `ahp_*` MCP tools are present, use them
+  (structured arguments); otherwise the `ahp` CLI. `ahp <verb>` ↔ `ahp_<verb>`.
 - **Claude Code skill** (`skills/claude-code/agent-handoff-protocol/`).
 - **Per-project write lock** with stale-lock reclaim; `fsync` on every append.
 - End-to-end test suite (`test/run.mjs`).
