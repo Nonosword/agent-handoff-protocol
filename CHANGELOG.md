@@ -5,6 +5,20 @@ change to record shape or required procedure is a major bump.
 
 ## [Unreleased]
 
+### Added
+
+- `ahp read --worker <id>` and `ahp log --worker <id>` — one agent's trail only.
+- `ahp pickup` recognises a prior turn of yours and says so
+  (*"You (codex) last held the baton at seq N, M handoffs since — your earlier
+  plan may be stale, reconcile and continue forward"*), without moving the
+  pickup anchor. Rationale in [`docs/rationale.md`](docs/rationale.md).
+
+### Fixed
+
+- `ahp status` "last session by …" reads the last record's worker, not the last
+  `handoff.start` (a session that started `unknown` but ended attributed was
+  shown as `unknown`).
+
 ### Planned
 
 - **Networked server** (design in [`docs/networked-server.md`](docs/networked-server.md),

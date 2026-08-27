@@ -1,5 +1,39 @@
 # Rationale & FAQ
 
+## When I resume after another agent worked, do I see everything, or just what changed?
+
+You see **what changed since the last handoff** — not a full history dump, and
+not "just since my own last commit."
+
+`ahp pickup` anchors to the *last* `handoff.start` and its base commit, whoever
+wrote it. So if Codex ran, then Claude ran and committed six times, then Codex's
+limit resets and Codex resumes: Codex's pickup shows Claude's six commits, their
+`landmines`, and their open intents — bounded to that one session. Codex does
+**not** rewind to its own earlier commit.
+
+This is deliberate:
+
+- **A resumed agent's memory is a liability.** It still holds its pre-reset plan
+  and its old view of the tree, but the tree has moved. Forcing a clean pickup
+  makes it reconcile with ground truth instead of "continuing my thing."
+- **The `next` fields chain forward.** The previous worker's last
+  `intent.promote.next` / `handoff.end.findings` is the instruction. You don't
+  need your own old plan — the other agent may have already done it, or changed
+  direction.
+- **The view is bounded.** You get one session's worth of context, not 40
+  records. `ahp log` shows the rest if you want it.
+
+`ahp pickup` prints a line — *"You (codex) last held the baton at seq 14, N
+handoffs since; your earlier plan may be stale"* — when it recognises a prior
+turn of yours, so the resumed agent is told plainly: don't dwell, reconcile,
+continue forward.
+
+What you *lose*: your own earlier `landmines` aren't re-surfaced on pickup. That
+is correct — the worklog is session continuity, not permanent project memory. A
+constraint that outlives a session (an architectural invariant, a "never do X")
+belongs in the project's own docs / checklist. `ahp log --worker <id>` still
+shows any one agent's complete trail for audit or analysis.
+
 ## Why a store outside the repo instead of a file in it?
 
 So the protocol can run against a repository that must stay pristine — no new

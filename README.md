@@ -47,6 +47,14 @@ An `intent.open` with no matching `intent.promote` is the pointer the next agent
 follows straight to the unfinished work in the dirty tree — even if the previous
 agent vanished without writing `handoff.end`.
 
+**Pickup is identity-agnostic.** It anchors to the *last handoff*, not to "your"
+last commit — so when you resume after another agent (or your own limit reset)
+has moved things, you reconcile *their* commits and carry on forward, rather than
+resuming from a stale plan in your memory. `ahp pickup` says so when it spots a
+prior turn of yours. The worklog is session continuity, not a per-agent journal:
+a constraint that outlives a session belongs in the project's own docs, and
+`ahp log --worker <id>` still shows any one agent's full trail.
+
 The worklog is one JSON-Lines file per project, **append-only**, ordered by an
 integer `seq`, living in a per-user store at
 `$XDG_DATA_HOME/agent-handoff/` — keyed by the project's Git identity, so it

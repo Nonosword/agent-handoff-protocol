@@ -30,8 +30,8 @@ READ
                          --json for scripts.
   status                 project, baton holder, open intents, tree/gate state
   pickup                 guided pickup: last handoff, commits since, open intents
-  read [--since N] [--tail K] [--type T] [--json]
-  log                    human-readable rendering of the worklog
+  read [--since N] [--tail K] [--type T] [--worker ID] [--json]
+  log  [--worker ID]     human-readable rendering of the worklog
   verify [--strict]      structural + lifecycle check of this project's worklog
   path                   print the worklog file path for this project
 
@@ -216,18 +216,42 @@ function cmdPickup(rest, home) {
     }
   }
   const reconcile = reconcileView(analysis, sinceCommits);
-  process.stdout.write(renderPickup({ project: proj, git: g, analysis, sinceCommits, reconcile }) + "\n");
+  // "you've been here before" — resolve the prospective picker's identity and
+  // find where it last held the baton, without moving the pickup anchor.
+  const meId = workerId(worker(values));
+  let selfHistory = null;
+  if (meId && meId !== "unknown") {
+    const mine = analysis.records.filter((r) => r.type === "handoff.start" && workerId(r.worker) === meId);
+    if (mine.length) {
+      const lastMine = mine[mine.length - 1];
+      const handoffsSince = analysis.records.filter((r) => r.type === "handoff.start" && r.seq > lastMine.seq).length;
+      // only worth saying when someone else has held the baton since
+      if (handoffsSince >= 1) selfHistory = { seq: lastMine.seq, at: lastMine.at, handoffsSince, meId };
+    }
+  }
+  process.stdout.write(renderPickup({ project: proj, git: g, analysis, sinceCommits, reconcile, selfHistory }) + "\n");
   return 0;
+}
+
+function workerId(w) {
+  return typeof w === "string" ? w : (w?.id ?? null);
+}
+
+function filterByWorker(records, want) {
+  if (!want) return records;
+  return records.filter((r) => workerId(r.worker) === want);
 }
 
 function cmdRead(rest, home) {
   const { values } = parse(rest, {
-    since: { type: "string" }, tail: { type: "string" }, type: { type: "string" }, json: { type: "boolean" }
+    since: { type: "string" }, tail: { type: "string" }, type: { type: "string" },
+    worker: { type: "string" }, json: { type: "boolean" }
   });
   const proj = resolveProject(values);
   let records = readEntries(proj.worklog).map((e) => e.record);
   if (values.since) records = records.filter((r) => r.seq > Number(values.since));
   if (values.type) records = records.filter((r) => r.type === values.type);
+  if (values.worker) records = filterByWorker(records, values.worker);
   if (values.tail) records = records.slice(-Number(values.tail));
   if (values.json) {
     for (const r of records) process.stdout.write(`${JSON.stringify(r)}\n`);
@@ -238,10 +262,11 @@ function cmdRead(rest, home) {
 }
 
 function cmdLog(rest, home) {
-  const { values } = parse(rest, {});
+  const { values } = parse(rest, { worker: { type: "string" } });
   const proj = resolveProject(values);
-  const records = readEntries(proj.worklog).map((e) => e.record);
-  process.stdout.write((records.length ? renderLog(records) : "(worklog empty)") + "\n");
+  let records = readEntries(proj.worklog).map((e) => e.record);
+  if (values.worker) records = filterByWorker(records, values.worker);
+  process.stdout.write((records.length ? renderLog(records) : "(no matching records)") + "\n");
   return 0;
 }
 

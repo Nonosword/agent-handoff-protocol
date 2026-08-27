@@ -191,6 +191,32 @@ test("worker identity is auto-detected, not left unknown", () => {
   assert.ok(typeof (rec.worker.id ?? rec.worker) === "string");
 });
 
+test("read/log --worker filters to one agent; pickup flags a prior turn", () => {
+  const P = mkrepo("projRot");
+  const as = (id) => ({ ...ENV, AHP_WORKER_ID: id });
+  const run = (id, args) => {
+    const r = spawnSync(process.execPath, [AHP, ...args], { cwd: P, env: as(id), encoding: "utf8" });
+    return { code: r.status ?? -1, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim() };
+  };
+
+  run("codex", ["start", "--plan", "p1", "--gate", "pass", "--evidence", "e"]);
+  run("codex", ["intent", "open", "--id", "r1", "--title", "t", "--intended", "i"]);
+  const sha = commit(P, "codex work");
+  run("codex", ["intent", "promote", "--id", "r1", "--commit", sha, "--gate", "pass", "--actual", "done"]);
+  run("codex", ["end", "--reason", "limit", "--summary", "s", "--gate", "pass", "--evidence", "e"]);
+  run("claude-code", ["start", "--plan", "p2", "--gate", "pass", "--evidence", "e"]);
+  run("claude-code", ["end", "--reason", "task-done", "--summary", "s", "--gate", "pass", "--evidence", "e"]);
+
+  const cx = run("codex", ["read", "--worker", "codex", "--json"]);
+  const lines = cx.out.trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(lines.length > 0 && lines.every((r) => (r.worker.id ?? r.worker) === "codex"), cx.out);
+  assert.ok(!lines.some((r) => (r.worker.id ?? r.worker) === "claude-code"));
+
+  const pk = run("codex", ["pickup"]);
+  assert.match(pk.out, /You \(codex\) last held the baton/);
+  assert.match(pk.out, /1 handoff since/);
+});
+
 test("bundled example worklogs still validate", () => {
   for (const f of fs.readdirSync(path.join(REPO, "examples")).filter((n) => n.endsWith(".jsonl"))) {
     const r = sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", path.join(REPO, "examples", f), "--quiet"]);

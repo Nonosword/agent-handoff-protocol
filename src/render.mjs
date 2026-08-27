@@ -52,7 +52,7 @@ export function renderStatus({ project, git: g, analysis }) {
   return L.join("\n");
 }
 
-export function renderPickup({ project, git: g, analysis, sinceCommits, reconcile }) {
+export function renderPickup({ project, git: g, analysis, sinceCommits, reconcile, selfHistory }) {
   const L = [];
   L.push(`# AHP pickup — ${project.name} [${project.id}]`);
   L.push("");
@@ -60,6 +60,11 @@ export function renderPickup({ project, git: g, analysis, sinceCommits, reconcil
     L.push("Worklog is empty. This is a fresh start.");
     L.push("Next: `ahp start --plan \"…\" --gate pass|fail|not-run`");
     return L.join("\n");
+  }
+  if (selfHistory) {
+    L.push(`You (${selfHistory.meId}) last held the baton at seq ${selfHistory.seq}, ${ago(selfHistory.at)}.`);
+    L.push(`${selfHistory.handoffsSince} handoff${selfHistory.handoffsSince === 1 ? "" : "s"} since. Your earlier plan may be stale — reconcile the changes below and continue forward, don't resume from memory.`);
+    L.push("");
   }
   const s = analysis.lastStart;
   L.push(`Last handoff.start — ${workerLabel(s.worker)}, ${ago(s.at)}`);
