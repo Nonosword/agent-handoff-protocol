@@ -122,7 +122,7 @@ mid-session cutoff.
 | [`integrations/`](./integrations/) | Codex snippet, MCP config, generic prompt, git hook |
 | [`tools/verify-worklog.mjs`](./tools/verify-worklog.mjs) | standalone file validator |
 | [`examples/`](./examples/) | relay-with-cutoff, solo, hard cutoff |
-| [`docs/`](./docs/) | [rationale & FAQ](./docs/rationale.md), [adoption](./docs/adoption.md) |
+| [`docs/`](./docs/) | [rationale & FAQ](./docs/rationale.md), [adoption](./docs/adoption.md), [networked server (planned)](./docs/networked-server.md) |
 
 ## Why not just…
 
