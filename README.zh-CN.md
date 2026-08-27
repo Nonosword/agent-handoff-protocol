@@ -55,8 +55,8 @@ cd ~/Repositories/agent-handoff-protocol
 ./install.sh
 ```
 
-安装脚本会把 `ahp` / `ahp-mcp` 软链到 PATH、创建 store、检测 `claude` 和 `codex` 是否安装，
-然后问你 agent 用哪种方式接入：
+安装脚本会分步骤逐条报告——把 `ahp` / `ahp-mcp` 软链到 PATH 并验证能跑、创建并探测 store、
+检测 `claude` 和 `codex` 是否安装，然后（方向键选择）问你 agent 用哪种方式接入：
 
 - **skill** —— 把 Claude Code skill 部署到 `~/.claude/skills/`，并追加 Codex 的 `AGENTS.md` 片段。
   agent 直接跑 `ahp` CLI。

@@ -61,9 +61,10 @@ cd ~/Repositories/agent-handoff-protocol
 ./install.sh
 ```
 
-The installer symlinks the `ahp` / `ahp-mcp` CLIs onto your PATH, creates the
-store, detects whether `claude` and `codex` are installed, then asks how your
-agents should reach `ahp`:
+The installer walks through it with a step-by-step report — symlinks the
+`ahp` / `ahp-mcp` CLIs onto your PATH and checks each runs, creates and probes
+the store, detects whether `claude` and `codex` are installed, then (arrow keys)
+asks how your agents should reach `ahp`:
 
 - **skill** — deploys the Claude Code skill to `~/.claude/skills/` and appends
   the Codex `AGENTS.md` snippet. Agents run the `ahp` CLI.

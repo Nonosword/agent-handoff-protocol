@@ -23,9 +23,13 @@ The protocol becomes storage-location-agnostic and ships a real CLI.
 - **`ahp-mcp`** — Model Context Protocol server over stdio (zero deps): tools
   `ahp_status`, `ahp_pickup`, `ahp_start`, `ahp_intent_open`,
   `ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`.
-- **`install.sh`** — one-command deploy. Symlinks the CLIs, creates the store,
-  then either deploys the Claude Code skill + Codex `AGENTS.md` snippet, or
-  registers the MCP server with detected hosts. `--uninstall`, `--dry-run`.
+- **`install.sh`** — one-command deploy with a structured, coloured, step-by-step
+  report (every action logs a line; TUI-style sections and status markers) and an
+  arrow-key mode picker. Symlinks the CLIs and verifies each runs, creates and
+  probes the store, detects `claude` / `codex`, then either deploys the Claude
+  Code skill + Codex `AGENTS.md` snippet or registers + self-tests the MCP
+  server, offers to add the bin dir to your shell rc, and finishes with a
+  self-test. `--mode`, `--dry-run`, `--no-color`, `--uninstall`.
 - **Claude Code skill** (`skills/claude-code/agent-handoff-protocol/`).
 - **Per-project write lock** with stale-lock reclaim; `fsync` on every append.
 - End-to-end test suite (`test/run.mjs`).
