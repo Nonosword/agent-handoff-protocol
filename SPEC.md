@@ -1,6 +1,9 @@
 # Agent Handoff Protocol (AHP)
 
-**Version:** 0.3.0 · **Status:** stable · **License:** MIT
+**Status:** pre-1.0 — record fields may still change · **License:** [MIT](./LICENSE)
+
+The version is in [`package.json`](./package.json); changes are logged in
+[`CHANGELOG.md`](./CHANGELOG.md).
 
 The machine contract is [`schema/worklog.schema.json`](./schema/worklog.schema.json).
 This document is normative; the JSON Schema, the reference `ahp` CLI and
@@ -28,16 +31,38 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be interpreted a
 in RFC 2119.
 
 - **Worker** — one agent identity within one continuous run (one model, one
-  runtime, one session).
-- **Session** — the span from a worker's *pickup* to its *drop* (or cutoff).
-- **Baton** — the right to be the single active worker on a repository.
+  runtime, one session). The identity used for attribution is a single
+  canonical id (`claude`, `codex`, `cursor`, …); the finer runtime spelling
+  MAY be carried separately in `worker.runtime`.
+  *Avoid:* `claude-code` / `Claude Code` as the id (that is a runtime, not the
+  worker id — it folds to `claude`); `agent`; `bot`.
+- **Session** — the span from a worker's *pickup* to its *drop* (or cutoff),
+  named by a `sessionId` (§5.2) minted on `handoff.start`.
+  *Avoid:* "run", "turn", "conversation" — a session spans many turns and may
+  outlive one conversation.
+- **Baton** — the right to be the single active worker on a repository. Exactly
+  one session holds it at a time. A consumer reads its state from the **baton
+  projection** (§6.1), not by re-folding the record stream.
+  *Avoid:* "lock" (it is advisory, not enforced), "lease".
+- **Severed** — a session whose baton ended without a `handoff.end` (a hard
+  cutoff), as opposed to *released* by a clean `handoff.end`. Severing is
+  expected and recovered by §7.1; it is not an error.
+  *Avoid:* "crashed", "abandoned".
 - **Pickup / drop** — acquiring / releasing the baton.
+  *Avoid:* "checkout / checkin", "claim / release".
 - **Worklog** — the append-only record stream defined in §4.
+  *Avoid:* "history", "journal", "event log" — it is not replayed and not
+  event-sourced.
 - **Intent** — a planned unit of work, normally one commit.
+  *Avoid:* "task", "ticket", "issue" — those live in the project's own tracker
+  and may be referenced from `intent.refs`.
 - **Promote** — record that an intent's commit has landed, with its actual result.
+  *Avoid:* "close", "complete", "resolve".
 - **VCS** — the version-control system. This document uses Git; §10 covers others.
 - **Gate** — the project's own verification command (tests, lint, type-check,
   build — whatever the project already treats as "is it OK to commit").
+  *Avoid:* "CI", "check", "build" — the gate is whichever of these the project
+  already gates commits on.
 
 ## 3. The problem
 
@@ -136,12 +161,20 @@ fields.
 `intent.*` records MAY carry the short id form; a `handoff.start` SHOULD carry the
 object form at least once per session so the log is self-describing.
 
+For attribution and for "is this my own earlier turn", a consumer MUST fold the
+id to a **canonical worker id**: lower-case, whitespace to `-`, and map the
+known runtime spellings to the agent (`claude-code`, `Claude Code` →
+`claude`). A `model` / `runtime` that differs from the canonical id is kept for
+description only. An id that matches no known agent keeps its own (sanitised)
+name; only a genuinely absent identity is `unknown`.
+
 ### 5.2 `handoff.start`
 
 Written by a worker when it picks up the baton, after completing §7.1.
 
 | Field | Type | Rule |
 | --- | --- | --- |
+| `sessionId` | string | SHOULD be present. `<canonical-worker>-<yyyymmdd>-<this record's seq>`, e.g. `codex-20260904-5`. Names the session for the records that follow. |
 | `continuesFrom` | integer \| null | `seq` of the previous `handoff.start`, or `null` for the first ever |
 | `base` | object | the verified starting state (below) |
 | `plan` | string | what this worker intends to attempt this session |
@@ -163,6 +196,7 @@ record existing; §7.1 recovers the same state without it.
 
 | Field | Type | Rule |
 | --- | --- | --- |
+| `sessionId` | string | SHOULD echo the `sessionId` of the `handoff.start` this ends |
 | `reason` | string | `limit`, `task-done`, `blocked`, or `handoff-requested` |
 | `end` | object | same shape as `base` in §5.2 (`commit`, `gate`, `gateEvidence`, `treeClean`) |
 | `summary` | string | what actually happened this session |
@@ -176,6 +210,7 @@ Written before starting a unit of work.
 | Field | Type | Rule |
 | --- | --- | --- |
 | `intentId` | string | unique within the worklog; SHOULD be short and dated, e.g. `i-0828-a` |
+| `sessionId` | string | SHOULD echo the current session's id while a baton is held |
 | `title` | string | one line |
 | `intended` | string | what the worker plans to do and why |
 | `refs` | string[] | optional — issue ids, checklist items, ticket URLs this advances |
@@ -188,6 +223,7 @@ Written after the intent's commit has landed.
 | Field | Type | Rule |
 | --- | --- | --- |
 | `intentId` | string | MUST match a prior `intent.open`; MUST NOT be promoted twice |
+| `sessionId` | string | SHOULD echo the current session's id while a baton is held |
 | `commits` | string[] | VCS revisions that realized this intent; MUST be non-empty unless `gate` is `fail` |
 | `gate` | string | `pass`, `fail` or `not-run` for the resulting commit(s) |
 | `actual` | string | what was actually done, including deviations from `intended` |
@@ -207,6 +243,25 @@ intent.open ──────────────► (work) ─────
 open, no promote  =  unfinished or uncommitted work
                      → the pointer the next worker follows into the dirty tree
 ```
+
+### 6.1 The baton projection
+
+A consumer determines baton state by folding the record stream once into a
+single **baton** object, and every view reads that — it does not re-derive
+"who holds it" per call:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `sessionId` | string | the last `handoff.start`'s `sessionId` (synthesised by the §5.2 rule if that record predates the field) |
+| `worker` | string | the canonical worker id (§5.1) of that `handoff.start` |
+| `phase` | string | `held` — no `handoff.end` after that start; or `released` — a `handoff.end` followed it |
+| `sinceSeq` | integer | that `handoff.start`'s `seq` |
+| `since` | string | that `handoff.start`'s `at` |
+
+A `phase: held` baton whose start wrote no `handoff.end` and is not the newest
+record is a *severed* session for §7.1 purposes; a validator reports it as a
+note, not an error (§12). `ahp status --json` and `ahp dashboard --json` expose
+this object.
 
 ## 7. Procedures
 
@@ -281,11 +336,27 @@ identifier the VCS uses.
 ## 11. Security and privacy
 
 - The worklog MUST NOT contain secrets, tokens, credentials, or customer data.
-  Free-text fields (`actual`, `findings`, `landmines`, `summary`) are the risk.
+  Free-text fields (`actual`, `findings`, `landmines`, `summary`, `plan`,
+  `intended`, `next`) are the risk — an implementation MUST NOT auto-populate
+  them from file contents, diffs, environment, or command output; they carry
+  only what the worker writes.
 - Paths in the worklog SHOULD be repository-relative, never absolute machine
   paths.
-- The file is local and ignored by VCS, but may still be captured by editor sync,
-  backups or crash reporters. Treat it as "internal, not encrypted".
+- **Nothing is transmitted.** A conformant implementation makes no network
+  request: no telemetry, no remote store, no `git fetch`/`push`/`ls-remote`.
+  All VCS reads are local (`rev-parse`, `status`, `log`, `remote get-url`,
+  `merge-base`).
+- The **registry** (`<store>/projects.json`, §4.4) is not the worklog: to
+  resolve a project across moves and re-clones it records each checkout's
+  **absolute path** and the **remote URL** (which may name a private repo and a
+  host account). It stays on the machine that wrote it; treat the whole store
+  directory as internal.
+- Last-resort worker attribution (§5.1) MAY inspect ancestor **process command
+  lines** to recognise a known agent host. An implementation that does so MUST
+  match only against a fixed list of agent names and MUST NOT store, log, or
+  transmit the command line itself.
+- The store is local and ignored by VCS, but may still be captured by editor
+  sync, backups or crash reporters. Treat it as "internal, not encrypted".
 
 ## 12. Conformance
 
@@ -294,8 +365,13 @@ identifier the VCS uses.
 - A **conformant consumer** performs §7.1 and tolerates a missing `handoff.end`.
 - A **conformant validator** enforces §5 structure and the §6 lifecycle
   (`promote` requires a prior `open`; no double promote; `fail` requires
-  `landmines`) and reports un-promoted intents. It is not required to consult the
-  VCS.
+  `landmines`) as **errors**, and separates two lighter tiers: **warnings** for
+  a well-formed log with a quality problem (a `pass` gate with no
+  `gateEvidence`, a non-RFC-3339 `at`, a baton not `verifiedBy: self`) and
+  **notes** for expected, valid situations (a hard cutoff — two `handoff.start`
+  with no `handoff.end` between; an intent still open mid-work). A validator
+  SHOULD fail on warnings by default and offer a lenient mode that does not; it
+  MUST NOT fail on notes. It is not required to consult the VCS.
 
 The `ahp` CLI in this repository is the reference producer and consumer;
 `ahp verify` and `tools/verify-worklog.mjs` are reference validators.

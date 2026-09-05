@@ -30,11 +30,15 @@ export function renderStatus({ project, git: g, analysis }) {
   }
   const s = analysis.lastStart;
   const lastRec = analysis.records[analysis.records.length - 1];
-  if (analysis.batonHeld) {
+  const b = analysis.baton;
+  if (!b) {
+    L.push(`baton     never taken — ${analysis.count} record(s) but no handoff.start`);
+    L.push("          run `ahp pickup` then `ahp start`");
+  } else if (analysis.batonHeld) {
     L.push(`baton     HELD by ${workerLabel(analysis.batonWorker)}  (since ${ago(s.at)})`);
-    L.push(`          plan: ${s.plan}`);
+    L.push(`          session ${b.sessionId}  ·  plan: ${s.plan}`);
   } else {
-    L.push(`baton     free — last session by ${workerLabel(lastRec?.worker ?? s?.worker)} ended ${lastRec ? ago(lastRec.at) : "?"}`);
+    L.push(`baton     free — session ${b.sessionId} by ${workerLabel(lastRec?.worker ?? s?.worker)} ended ${lastRec ? ago(lastRec.at) : "?"}`);
     L.push("          run `ahp pickup` then `ahp start`");
   }
   L.push(`records   ${analysis.count}   last seq ${analysis.lastSeq}`);
@@ -67,7 +71,12 @@ export function renderPickup({ project, git: g, analysis, sinceCommits, reconcil
     L.push("");
   }
   const s = analysis.lastStart;
-  L.push(`Last handoff.start — ${workerLabel(s.worker)}, ${ago(s.at)}`);
+  if (!s) {
+    L.push(`No handoff.start yet — ${analysis.count} record(s) written without one.`);
+    L.push("Inspect them (`ahp log`), then: `ahp start --plan \"…\" --gate pass|fail|not-run`");
+    return L.join("\n");
+  }
+  L.push(`Last handoff.start — ${workerLabel(s.worker)}, ${ago(s.at)}  ·  session ${analysis.baton.sessionId}`);
   L.push(`  base commit : ${s.base?.commit ?? "?"}  (gate ${s.base?.gate ?? "?"})`);
   L.push(`  plan        : ${s.plan}`);
   if (analysis.batonHeld) {
@@ -115,7 +124,7 @@ export function renderLog(records) {
     if (r.type === "handoff.start") {
       session += 1;
       L.push("");
-      L.push(`── session ${session}: ${workerLabel(r.worker)} · ${r.at} ──`);
+      L.push(`── session ${session}: ${r.sessionId ?? workerLabel(r.worker)} · ${r.at} ──`);
       L.push(`   from ${r.base?.commit?.slice(0, 12) ?? "?"} (gate ${r.base?.gate ?? "?"})  ·  ${r.plan}`);
     } else if (r.type === "intent.open") {
       L.push(`   ○ ${r.intentId}  ${r.title}`);

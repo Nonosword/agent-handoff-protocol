@@ -6,12 +6,14 @@ export const GATES = new Set(["pass", "fail", "not-run"]);
 export const END_REASONS = new Set(["limit", "task-done", "blocked", "handoff-requested"]);
 export const RECORD_TYPES = ["handoff.start", "handoff.end", "intent.open", "intent.promote"];
 
-const REQUIRED = {
+export const REQUIRED = {
   "handoff.start": ["seq", "at", "worker", "continuesFrom", "base", "plan"],
   "handoff.end": ["seq", "at", "worker", "reason", "end", "summary"],
   "intent.open": ["seq", "at", "worker", "intentId", "title", "intended"],
   "intent.promote": ["seq", "at", "worker", "intentId", "commits", "gate", "actual"]
 };
+
+const workerLabel = (w) => (typeof w === "string" ? w : w?.id ?? "?");
 
 // Parse JSONL text -> [{ record, no }]. Throws on a malformed line so callers
 // can decide to stop (SPEC §8: do not append after a corrupt line).
@@ -33,11 +35,20 @@ export function parseJsonl(text) {
 }
 
 // entries: [{ record, no }] from parseJsonl. Returns { errors, warnings, stats }.
+// Three tiers:
+//   errors   — the log is malformed or a lifecycle rule is broken. Always fatal.
+//   warnings — the log is well-formed but has a quality problem (bad timestamp,
+//              a `pass` gate with no evidence, a baton not self-verified).
+//              `ahp verify` fails on these by default; `--lenient` downgrades them.
+//   notes    — expected, valid situations worth pointing at (a hard cutoff, an
+//              open intent mid-work). Never fatal, in any mode.
 export function validateRecords(entries) {
   const errors = [];
   const warnings = [];
+  const notes = [];
   const err = (m) => errors.push(m);
   const warn = (m) => warnings.push(m);
+  const note = (m) => notes.push(m);
 
   for (const { record, no } of entries) {
     if (!RECORD_TYPES.includes(record.type)) { err(`line ${no}: unknown record type ${JSON.stringify(record.type)}`); continue; }
@@ -87,7 +98,10 @@ export function validateRecords(entries) {
   for (const { record, no } of entries) {
     switch (record.type) {
       case "handoff.start":
-        if (activeHandoff) warn(`line ${no}: handoff.start before the previous handoff.end — expected only after a cutoff`);
+        if (activeHandoff) {
+          const w = workerLabel(activeHandoff.worker);
+          note(`line ${no}: baton severed — the session that started at seq ${activeHandoff.seq} (${w}) wrote no handoff.end before this one. A hard cutoff; SPEC §7.1 recovers it. If you are picking up, run \`ahp pickup\` and reconcile against HEAD before writing.`);
+        }
         activeHandoff = record;
         break;
       case "handoff.end":
@@ -95,10 +109,12 @@ export function validateRecords(entries) {
         activeHandoff = null;
         break;
       case "intent.open":
+        if (!activeHandoff) warn(`line ${no}: intent.open "${record.intentId}" with no baton held — open an intent only during a session (SPEC §7.2)`);
         if (opened.has(record.intentId)) err(`line ${no}: intent "${record.intentId}" opened twice`);
         opened.set(record.intentId, no);
         break;
       case "intent.promote":
+        if (!activeHandoff) warn(`line ${no}: intent.promote "${record.intentId}" with no baton held — promote only during a session (SPEC §7.2)`);
         if (!opened.has(record.intentId)) err(`line ${no}: intent.promote for "${record.intentId}" with no prior intent.open`);
         if (promoted.has(record.intentId)) err(`line ${no}: intent "${record.intentId}" promoted twice`);
         promoted.add(record.intentId);
@@ -108,11 +124,10 @@ export function validateRecords(entries) {
 
   const stillOpen = [...opened.keys()].filter((id) => !promoted.has(id));
   if (stillOpen.length > 0) {
-    warn(`${stillOpen.length} intent(s) open and not promoted: ${stillOpen.join(", ")} — inspect the working tree for matching uncommitted work`);
+    note(`${stillOpen.length} intent(s) open and not promoted: ${stillOpen.join(", ")} — inspect the working tree for matching uncommitted work`);
   }
   if (activeHandoff) {
-    const w = typeof activeHandoff.worker === "string" ? activeHandoff.worker : activeHandoff.worker?.id ?? "?";
-    warn(`log ends mid-session (worker "${w}" wrote no handoff.end) — reconstruct state per SPEC §7.1 steps 2-4`);
+    note(`log ends mid-session (${workerLabel(activeHandoff.worker)} wrote no handoff.end) — best-effort end is optional; SPEC §7.1 steps 2-4 reconstruct state`);
   }
   const lastEnd = [...entries].reverse().find((x) => x.record.type === "handoff.end");
   if (lastEnd && lastEnd.record.end?.gate && lastEnd.record.end.gate !== "pass" && !(Array.isArray(lastEnd.record.findings) && lastEnd.record.findings.length > 0)) {
@@ -122,6 +137,7 @@ export function validateRecords(entries) {
   return {
     errors,
     warnings,
+    notes,
     stats: {
       records: entries.length,
       promoted: promoted.size,

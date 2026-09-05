@@ -15,6 +15,11 @@
       "format": "date-time",
       "description": "RFC 3339 timestamp in UTC (…Z)."
     },
+    "sessionId": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "The session this record belongs to: `<canonical-worker>-<yyyymmdd>-<seq of the handoff.start>`. SHOULD be present on `handoff.start` (which mints it) and echoed on records written while that baton is held."
+    },
     "worker": {
       "oneOf": [
         { "type": "string", "minLength": 1, "maxLength": 120 },

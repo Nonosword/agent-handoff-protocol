@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { spawnSync } from "node:child_process";
+import { canonicalWorkerId } from "./worker-detect.mjs";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -100,20 +101,20 @@ const TOOLS = [
   },
   {
     name: "ahp_read",
-    description: "Read worklog records for the current project (human-readable, or raw with as_json).",
+    description: "Read worklog records for the current project (human-readable, or raw with as_json). `field` projects one field flat across matching records instead of whole records — e.g. field:\"landmines\" or field:\"next\"; field:\"hazards\" pulls landmines + findings together (what the next worker must know). With field set, `tail` counts values, not records.",
     inputSchema: {
       type: "object",
       properties: {
         since: { type: "number" }, tail: { type: "number" }, type: { type: "string" },
-        as_json: { type: "boolean" },
+        worker: { type: "string" }, field: { type: "string" }, as_json: { type: "boolean" },
         ...COMMON
       }
     }
   },
   {
     name: "ahp_verify",
-    description: "Structural + lifecycle check of the current project's worklog.",
-    inputSchema: { type: "object", properties: { strict: { type: "boolean" }, ...COMMON } }
+    description: "Structural + lifecycle check of the current project's worklog. Strict by default (a quality warning fails); pass lenient:true for an old or knowingly-messy log.",
+    inputSchema: { type: "object", properties: { lenient: { type: "boolean" }, ...COMMON } }
   }
 ];
 
@@ -121,16 +122,20 @@ function toArgv(name, a = {}) {
   const g = [];
   if (a.project) g.push("--project", String(a.project));
   if (a.cwd) g.push("--cwd", String(a.cwd));
-  const list = (flag, arr) => (arr ?? []).forEach((v) => g.push(flag, String(v)));
+  // push into the command's own argv (r), NOT g — g has already been spread
+  // into r by the time these run, so appending to g here would be dropped.
+  const list = (r, flag, arr) => (arr ?? []).forEach((v) => r.push(flag, String(v)));
   switch (name) {
     case "ahp_status": return ["status", ...g];
     case "ahp_pickup": return ["pickup", ...g];
-    case "ahp_verify": return ["verify", ...(a.strict ? ["--strict"] : []), ...g];
+    case "ahp_verify": return ["verify", ...(a.lenient ? ["--lenient"] : []), ...g];
     case "ahp_read": {
       const r = ["read", ...g];
       if (a.since != null) r.push("--since", String(a.since));
       if (a.tail != null) r.push("--tail", String(a.tail));
       if (a.type) r.push("--type", String(a.type));
+      if (a.worker) r.push("--worker", String(a.worker));
+      if (a.field) r.push("--field", String(a.field));
       if (a.as_json) r.push("--json");
       return r;
     }
@@ -146,12 +151,12 @@ function toArgv(name, a = {}) {
     }
     case "ahp_intent_open": {
       const r = ["intent", "open", "--id", String(a.id), "--title", String(a.title), "--intended", String(a.intended), ...g];
-      list("--ref", a.refs); list("--scope", a.scope);
+      list(r, "--ref", a.refs); list(r, "--scope", a.scope);
       return r;
     }
     case "ahp_intent_promote": {
       const r = ["intent", "promote", "--id", String(a.id), "--gate", String(a.gate), "--actual", String(a.actual), ...g];
-      list("--commit", a.commits); list("--landmine", a.landmines);
+      list(r, "--commit", a.commits); list(r, "--landmine", a.landmines);
       if (a.next) r.push("--next", String(a.next));
       return r;
     }
@@ -159,7 +164,7 @@ function toArgv(name, a = {}) {
       const r = ["end", "--reason", String(a.reason), "--summary", String(a.summary), ...g];
       if (a.gate) r.push("--gate", String(a.gate));
       if (a.evidence) r.push("--evidence", String(a.evidence));
-      list("--finding", a.findings);
+      list(r, "--finding", a.findings);
       return r;
     }
     default: throw new Error(`unknown tool: ${name}`);
@@ -196,7 +201,13 @@ function handle(msg) {
   try {
     if (method === "initialize") {
       const c = params?.clientInfo?.name;
-      if (typeof c === "string" && c.trim()) clientName = c.trim().replace(/\s+/g, "-").toLowerCase();
+      // fold the host's clientInfo.name ("Claude Code", "claude-code", …) to the
+      // same canonical id the CLI uses, so MCP-written and CLI-written records
+      // attribute to one worker.
+      if (typeof c === "string" && c.trim()) {
+        const canon = canonicalWorkerId(c);
+        if (canon !== "unknown") clientName = canon;
+      }
       return reply(id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },

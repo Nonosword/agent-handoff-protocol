@@ -8,6 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { canonicalWorkerId, WORKERS } from "../src/worker-detect.mjs";
+import { project, makeSessionId, assertCanOpen, assertCanPromote, assertCanEnd } from "../src/lifecycle.mjs";
+import { REQUIRED, RECORD_TYPES, GATES, END_REASONS } from "../src/validate.mjs";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const AHP = path.join(REPO, "bin", "ahp");
@@ -78,6 +81,109 @@ test("verify passes for the produced worklog", () => {
   const r = ahp(["verify"], A);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /4 record\(s\), 1 promoted/);
+});
+
+test("lifecycle: one authority for the baton projection and write preconditions", () => {
+  const recs = [
+    { type: "handoff.start", seq: 1, worker: { id: "codex" } },
+    { type: "intent.open", seq: 2, intentId: "i-1" },
+    { type: "intent.promote", seq: 3, intentId: "i-1", commits: ["abc1234"] }
+  ];
+  const p = project(recs);
+  assert.equal(p.batonHeld, true);
+  assert.equal(p.lastStart.seq, 1);
+  assert.deepEqual(p.openIntents, []);
+  assert.deepEqual(p.promotedCommits, ["abc1234"]);
+
+  assert.throws(() => assertCanOpen(recs, "i-1"), /already open/);
+  assert.throws(() => assertCanOpen(recs, "bad id"), /must match/);
+  assert.doesNotThrow(() => assertCanOpen(recs, "i-2"));
+  assert.throws(() => assertCanPromote(recs, { id: "i-1", gate: "pass", commits: ["x"] }), /already promoted/);
+  assert.throws(() => assertCanPromote(recs, { id: "i-9", gate: "pass", commits: ["x"] }), /no open intent/);
+  assert.throws(() => assertCanPromote(recs, { id: "i-1", gate: "pass", commits: [] }), /requires --commit/);
+  assert.throws(() => assertCanPromote(recs, { id: "i-1", gate: "fail", commits: [], landmines: [] }), /--landmine/);
+  assert.throws(() => assertCanEnd({ gate: "fail", findings: [] }), /--finding/);
+  assert.doesNotThrow(() => assertCanEnd({ gate: "pass", findings: [] }));
+});
+
+test("sessionId: minted on start, echoed while the baton is held, in the baton snapshot", () => {
+  const P = mkrepo("projSid");
+  const as = (id) => ({ ...ENV, AHP_WORKER_ID: id });
+  const run = (id, args) => spawnSync(process.execPath, [AHP, ...args], { cwd: P, env: as(id), encoding: "utf8" });
+
+  run("codex", ["start", "--plan", "p", "--gate", "pass", "--evidence", "e"]);
+  const sha = commit(P, "w");
+  run("codex", ["intent", "open", "--id", "i-1", "--title", "t", "--intended", "x"]);
+  run("codex", ["intent", "promote", "--id", "i-1", "--commit", sha, "--gate", "pass", "--actual", "d"]);
+  run("codex", ["end", "--reason", "task-done", "--summary", "s", "--gate", "pass", "--evidence", "e"]);
+
+  const recs = fs.readFileSync(ahp(["path"], P).out.trim(), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const start = recs[0];
+  assert.match(start.sessionId, /^codex-\d{8}-1$/, start.sessionId);
+  assert.equal(start.sessionId, makeSessionId(start.worker, start.at, start.seq));
+  for (const r of recs) assert.equal(r.sessionId, start.sessionId, `${r.type} echoes the session`);
+
+  // baton snapshot after a clean end
+  const st = JSON.parse(ahp(["status", "--json"], P).out);
+  assert.equal(st.baton.sessionId, start.sessionId);
+  assert.equal(st.baton.worker, "codex");
+  assert.equal(st.baton.phase, "released");
+  assert.equal(st.baton.sinceSeq, 1);
+
+  // `ahp log` heads each session with its sessionId
+  assert.match(ahp(["log"], P).out, new RegExp(`── session 1: ${start.sessionId} ·`));
+});
+
+test("baton snapshot agrees with the legacy batonHeld/batonWorker fold", () => {
+  // shadow-compare: the new single projection must not disagree with the old
+  // event fold for any bundled example, held or released.
+  for (const f of ["solo", "relay", "hard-cutoff"]) {
+    const recs = fs.readFileSync(path.join(REPO, "examples", `${f}.jsonl`), "utf8")
+      .trim().split("\n").map((l) => JSON.parse(l));
+    const p = project(recs);
+    if (p.lastStart) {
+      assert.equal(p.baton.phase === "held", p.batonHeld, `${f}: phase vs batonHeld`);
+      assert.equal(p.baton.worker, canonicalWorkerId(p.batonWorker), `${f}: worker`);
+      assert.equal(p.baton.sinceSeq, p.lastStart.seq, `${f}: sinceSeq`);
+    } else {
+      assert.equal(p.baton, null);
+    }
+  }
+});
+
+test("baton.sessionId is synthesised for a log written before the field existed", () => {
+  const recs = [
+    { type: "handoff.start", seq: 1, at: "2026-08-01T10:00:00Z", worker: { id: "claude-code" }, continuesFrom: null, base: { commit: "a1", gate: "pass", gateEvidence: "ok", treeClean: true, verifiedBy: "self" }, plan: "p" }
+  ];
+  assert.equal(project(recs).baton.sessionId, "claude-20260801-1");
+});
+
+test("verify: strict by default, notes never fatal, --lenient downgrades warnings", () => {
+  const dir = path.join(TMP, "verify-tiers"); fs.mkdirSync(dir, { recursive: true });
+  // a pass gate with no evidence = a warning; a hard cutoff = a note
+  const wl = path.join(dir, "w.jsonl");
+  fs.writeFileSync(wl, [
+    JSON.stringify({ type: "handoff.start", seq: 1, at: "2026-09-04T00:00:00Z", worker: { id: "claude" }, continuesFrom: null, base: { commit: "a1", gate: "pass", treeClean: true, verifiedBy: "self" }, plan: "p" }),
+    JSON.stringify({ type: "handoff.start", seq: 2, at: "2026-09-04T02:00:00Z", worker: { id: "codex" }, continuesFrom: 1, base: { commit: "a1", gate: "pass", gateEvidence: "12 ok", treeClean: true, verifiedBy: "self" }, plan: "q" })
+  ].join("\n") + "\n");
+  const tool = (extra) => sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", wl, ...extra]);
+  const strict = tool([]);
+  assert.equal(strict.code, 1, "warning is fatal by default");
+  assert.match(strict.out, /note: line 2: baton severed/);       // notes -> stdout
+  assert.match(strict.err, /error: line 1: .*without gateEvidence/); // fatal warning -> stderr
+  const lenient = tool(["--lenient"]);
+  assert.equal(lenient.code, 0, lenient.out + lenient.err);
+  assert.match(lenient.out, /warning: line 1: .*without gateEvidence/);
+  assert.match(lenient.out, /note: line 2: baton severed/);
+  assert.equal(tool(["--strict"]).code, 1, "--strict still accepted");
+
+  // an intent written with no baton held is a warning (fatal by default)
+  const wl2 = path.join(dir, "nobaton.jsonl");
+  fs.writeFileSync(wl2, JSON.stringify({ type: "intent.open", seq: 1, at: "2026-09-04T00:00:00Z", worker: { id: "codex" }, intentId: "i-x", title: "t", intended: "y" }) + "\n");
+  const r2 = sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", wl2]);
+  assert.equal(r2.code, 1);
+  assert.match(r2.err, /no baton held/);
+  assert.equal(sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", wl2, "--lenient"]).code, 0);
 });
 
 test("project B worklog is isolated from A", () => {
@@ -170,6 +276,31 @@ test("MCP server: initialize + tools/list + tools/call", () => {
   assert.match(call.result.content[0].text, /project\s+projA/);
 });
 
+test("MCP array args (commits/refs/landmines/findings) reach the CLI", () => {
+  // regression: toArgv's list() helper appended to the globals array *after*
+  // it had already been spread into the command argv, so every array-valued
+  // MCP arg was silently dropped — `ahp_intent_promote` with `commits` failed
+  // with "requires --commit".
+  const P = mkrepo("projMcpArr");
+  const sha = sh("git", ["rev-parse", "HEAD"], P).out;
+  const call = (id, name, args) =>
+    ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: { ...args, cwd: P } } });
+  const msgs = [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: {}, clientInfo: { name: "claude" } } },
+    call(2, "ahp_start", { plan: "p", gate: "pass", evidence: "e" }),
+    call(3, "ahp_intent_open", { id: "i-1", title: "t", intended: "do x", refs: ["src/a.js"] }),
+    call(4, "ahp_intent_promote", { id: "i-1", gate: "pass", actual: "did x", commits: [sha], landmines: ["watch y"], next: "n" }),
+    call(5, "ahp_end", { reason: "limit", summary: "s", gate: "pass", evidence: "e", findings: ["hazard"] })
+  ].map((m) => JSON.stringify(m)).join("\n") + "\n";
+  const r = spawnSync(process.execPath, [MCP], { input: msgs, env: ENV, encoding: "utf8", shell: false });
+  const byId = new Map(r.stdout.trim().split("\n").map((l) => JSON.parse(l)).map((m) => [m.id, m]));
+  for (const id of [2, 3, 4, 5]) {
+    assert.equal(byId.get(id).result.isError, false, `call ${id}: ${byId.get(id).result?.content?.[0]?.text}`);
+  }
+  assert.match(byId.get(4).result.content[0].text, new RegExp(sha.slice(0, 12)));
+  assert.equal(ahp(["verify"], P).code, 0);
+});
+
 test("dashboard runs from outside any repo and lists projects", () => {
   const r = ahp(["dashboard"], os.tmpdir());
   assert.ok(r.code === 0 || r.code === 1, r.err);
@@ -189,6 +320,79 @@ test("worker identity is auto-detected, not left unknown", () => {
   assert.equal(s.code, 0, s.err);
   const rec = JSON.parse(fs.readFileSync(ahp(["path"], P).out.trim(), "utf8").trim().split("\n")[0]);
   assert.ok(typeof (rec.worker.id ?? rec.worker) === "string");
+});
+
+test("worker identity folds to one canonical id (CLI == MCP)", () => {
+  // the split a week of real use produced: claude / claude-code / "Claude Code"
+  // are one worker. Every _avoid spelling must fold to its canonical id.
+  for (const w of WORKERS) {
+    assert.equal(canonicalWorkerId(w.id), w.id);
+    for (const a of w._avoid) assert.equal(canonicalWorkerId(a), w.id, `${a} -> ${w.id}`);
+  }
+  assert.equal(canonicalWorkerId("Claude Code"), "claude");
+  assert.equal(canonicalWorkerId("  CLAUDE-CODE  "), "claude");
+  assert.equal(canonicalWorkerId({ id: "claude-code", runtime: "claude-code" }), "claude");
+  assert.equal(canonicalWorkerId(null), "unknown");
+  assert.equal(canonicalWorkerId(""), "unknown");
+  assert.equal(canonicalWorkerId("worker"), "unknown");
+  // an unknown agent keeps its own name, sanitised — it does not become "unknown"
+  assert.equal(canonicalWorkerId("my-bot v2"), "my-bot-v2");
+});
+
+test("CLI attribution and MCP attribution agree on the canonical id", () => {
+  const P = mkrepo("projCanon");
+  const cliEnv = { ...ENV, AHP_WORKER_ID: "claude-code" };
+  spawnSync(process.execPath, [AHP, "start", "--plan", "p", "--gate", "pass", "--evidence", "e"], { cwd: P, env: cliEnv, encoding: "utf8" });
+  const rec = JSON.parse(fs.readFileSync(ahp(["path"], P).out.trim(), "utf8").trim().split("\n")[0]);
+  assert.equal(canonicalWorkerId(rec.worker), "claude");
+  // a later MCP-attributed record (clientInfo.name "Claude Code") lands as the
+  // same worker, so `read --worker claude` sees both.
+  const mcpMsgs = [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: {}, clientInfo: { name: "Claude Code" } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "ahp_intent_open", arguments: { id: "i-1", title: "t", intended: "x", cwd: P } } }
+  ].map((m) => JSON.stringify(m)).join("\n") + "\n";
+  spawnSync(process.execPath, [MCP], { input: mcpMsgs, env: ENV, encoding: "utf8" });
+  const filtered = ahp(["read", "--worker", "claude", "--json"], P);
+  const types = filtered.out.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l).type);
+  assert.deepEqual(types, ["handoff.start", "intent.open"], filtered.out);
+});
+
+test("read --field projects one field flat; --field hazards merges landmines+findings", () => {
+  const P = mkrepo("projField");
+  ahp(["start", "--plan", "p", "--gate", "pass", "--evidence", "e"], P);
+  for (const n of [1, 2]) {
+    ahp(["intent", "open", "--id", `i-${n}`, "--title", "t", "--intended", "x"], P);
+    const sha = commit(P, `c${n}`);
+    ahp(["intent", "promote", "--id", `i-${n}`, "--commit", sha, "--gate", "pass",
+      "--actual", `did ${n}`, "--landmine", `hazard ${n}a`, "--landmine", `hazard ${n}b`, "--next", `step ${n + 1}`], P);
+  }
+  ahp(["end", "--reason", "task-done", "--summary", "s", "--gate", "fail", "--evidence", "e", "--finding", "watch out"], P);
+
+  const landmines = ahp(["read", "--field", "landmines"], P).out.split("\n");
+  assert.deepEqual(landmines, ["seq 3  hazard 1a", "seq 3  hazard 1b", "seq 5  hazard 2a", "seq 5  hazard 2b"]);
+
+  // --tail counts projected values, not records
+  const tailed = ahp(["read", "--field", "landmines", "--tail", "1"], P).out;
+  assert.equal(tailed, "seq 5  hazard 2b");
+
+  // hazards = landmines + findings, in seq order, --json gives structured items
+  const hazJson = ahp(["read", "--field", "hazards", "--json"], P).out.trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(hazJson.map((h) => h.value), ["hazard 1a", "hazard 1b", "hazard 2a", "hazard 2b", "watch out"]);
+  assert.equal(hazJson.at(-1).field, "findings");
+  assert.equal(hazJson.at(-1).type, "handoff.end");
+
+  // a field with no matches is reported plainly, not an empty crash
+  assert.equal(ahp(["read", "--field", "next", "--type", "handoff.end"], P).out, "(no matching values)");
+
+  // MCP: field + worker both reach the CLI
+  const msgs = [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: {} } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "ahp_read", arguments: { field: "hazards", as_json: true, cwd: P } } }
+  ].map((m) => JSON.stringify(m)).join("\n") + "\n";
+  const mcpOut = spawnSync(process.execPath, [MCP], { input: msgs, env: ENV, encoding: "utf8" });
+  const call = JSON.parse(mcpOut.stdout.trim().split("\n")[1]);
+  assert.equal(call.result.isError, false);
+  assert.match(call.result.content[0].text, /watch out/);
 });
 
 test("read/log --worker filters to one agent; pickup flags a prior turn", () => {
@@ -215,6 +419,35 @@ test("read/log --worker filters to one agent; pickup flags a prior turn", () => 
   const pk = run("codex", ["pickup"]);
   assert.match(pk.out, /You \(codex\) last held the baton/);
   assert.match(pk.out, /1 handoff since/);
+});
+
+test("nothing in src/ can reach the network (SPEC §11)", () => {
+  const dir = path.join(REPO, "src");
+  const banned = /\b(node:https?|node:net|node:dns|node:tls|node:dgram|require\(["']https?["']\)|fetch\s*\(|new\s+WebSocket|import\s+https?\s+from|from\s+["']node:(https?|net|dns|tls|dgram)["'])/;
+  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".mjs"))) {
+    const src = fs.readFileSync(path.join(dir, f), "utf8");
+    assert.ok(!banned.test(src), `${f} references a network primitive`);
+  }
+  // the only child_process users, and only for local commands
+  const users = fs.readdirSync(dir).filter((n) => n.endsWith(".mjs"))
+    .filter((n) => /child_process/.test(fs.readFileSync(path.join(dir, n), "utf8")));
+  assert.deepEqual(users.sort(), ["git.mjs", "mcp.mjs", "worker-detect.mjs"]);
+});
+
+test("the hand-written validator and the JSON schema agree on the contract", () => {
+  // no ajv in `npm test`; instead pin the two most drift-prone surfaces —
+  // required fields per record type, and the closed enums — to the schema.
+  const schema = JSON.parse(fs.readFileSync(path.join(REPO, "schema", "worklog.schema.json"), "utf8"));
+  const topReq = schema.required.filter((f) => f !== "type");
+  const branch = (t) => schema.allOf.find((b) => b.if.properties.type.const === t).then;
+
+  assert.deepEqual(RECORD_TYPES.slice().sort(), schema.properties.type.enum.slice().sort());
+  for (const t of RECORD_TYPES) {
+    const want = [...new Set([...topReq, ...branch(t).required])].sort();
+    assert.deepEqual([...REQUIRED[t]].sort(), want, `required fields for ${t}`);
+  }
+  assert.deepEqual([...GATES].sort(), schema.$defs.gate.enum.slice().sort());
+  assert.deepEqual([...END_REASONS].sort(), branch("handoff.end").properties.reason.enum.slice().sort());
 });
 
 test("bundled example worklogs still validate", () => {

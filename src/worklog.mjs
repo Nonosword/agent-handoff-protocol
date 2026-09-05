@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseJsonl, validateRecords } from "./validate.mjs";
+import { project } from "./lifecycle.mjs";
 
 const LOCK_STALE_MS = 60_000;
 
@@ -21,41 +22,17 @@ export function lastSeq(worklogFile) {
 }
 
 // Everything a pickup / status view needs, derived from the record stream.
+// The baton projection lives in lifecycle.mjs so the write path and the read
+// path agree on it.
 export function analyze(entries) {
   const records = entries.map((e) => e.record);
-  const { errors, warnings, stats } = validateRecords(entries);
-
-  let lastStart = null;
-  let batonHeld = false;
-  let batonWorker = null;
-  const openIntents = [];
-  const promotedCommits = new Set();
-  const promotes = [];
-
-  for (const r of records) {
-    if (r.type === "handoff.start") { lastStart = r; batonHeld = true; batonWorker = r.worker; }
-    else if (r.type === "handoff.end") { batonHeld = false; }
-    else if (r.type === "intent.promote") {
-      promotes.push(r);
-      for (const c of r.commits ?? []) promotedCommits.add(c);
-    }
-  }
-  const promotedIds = new Set(promotes.map((p) => p.intentId));
-  for (const r of records) {
-    if (r.type === "intent.open" && !promotedIds.has(r.intentId)) openIntents.push(r);
-  }
-
+  const { errors, warnings, notes, stats } = validateRecords(entries);
   return {
     records,
     count: records.length,
     lastSeq: records.length ? records[records.length - 1].seq : 0,
-    lastStart,
-    batonHeld,
-    batonWorker,
-    openIntents,
-    promotes,
-    promotedCommits: [...promotedCommits],
-    validation: { errors, warnings, stats }
+    ...project(records),
+    validation: { errors, warnings, notes, stats }
   };
 }
 
@@ -105,7 +82,9 @@ function sleepMs(ms) {
 
 // Append one record. Assigns `seq` and `at` if absent. Runs under the lock,
 // re-reads the tail so `seq` is correct, refuses to append after a corrupt line.
-export function appendRecord(worklogFile, lockFile, record, { now = () => new Date().toISOString() } = {}) {
+// `derive(full)` runs after `seq`/`at` are assigned and its result is merged in
+// — for fields computed from the final seq (e.g. a handoff.start's sessionId).
+export function appendRecord(worklogFile, lockFile, record, { now = () => new Date().toISOString(), derive } = {}) {
   fs.mkdirSync(path.dirname(worklogFile), { recursive: true });
   acquireLock(lockFile);
   try {
@@ -119,6 +98,7 @@ export function appendRecord(worklogFile, lockFile, record, { now = () => new Da
     if (!Number.isSafeInteger(full.seq) || full.seq <= prevSeq) {
       throw new Error(`seq ${full.seq} is not greater than the last seq ${prevSeq}`);
     }
+    if (derive) Object.assign(full, derive(full));
     const line = `${JSON.stringify(full)}\n`;
     const fd = fs.openSync(worklogFile, "a");
     try { fs.writeSync(fd, line); fs.fsyncSync(fd); }

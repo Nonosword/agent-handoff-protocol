@@ -74,12 +74,12 @@ function toJson(rows) {
     branch: g.branch ?? null,
     head: g.head ?? null,
     treeClean: g.clean ?? null,
-    baton: a.batonHeld ? { heldBy: workerLabel(a.batonWorker), since: a.lastStart?.at ?? null, plan: a.lastStart?.plan ?? null, stale: !!staleBaton } : null,
+    baton: a.baton ? { ...a.baton, plan: a.lastStart?.plan ?? null, stale: a.baton.phase === "held" && !!staleBaton } : null,
     records: a.count,
     lastSeq: a.lastSeq,
     promoted: a.promotes.length,
     openIntents: a.openIntents.map((i) => i.intentId),
-    verify: readError ? { error: readError } : { errors: a.validation.errors, warnings: a.validation.warnings.length },
+    verify: readError ? { error: readError } : { errors: a.validation.errors, warnings: a.validation.warnings, notes: a.validation.notes },
     driftCommits: drift.map((c) => ({ short: c.short, subject: c.subject }))
   }));
 }
@@ -137,6 +137,10 @@ function render(home, { footer = "" } = {}) {
       anyError = true;
       L.push(`    ${c.err(`✗ verify: ${a.validation.errors.length} error(s)`)}`);
       for (const e of a.validation.errors.slice(0, 3)) L.push(`      ${c.err(e)}`);
+    } else if (a.validation.warnings.length) {
+      anyError = true;
+      L.push(`    ${c.warn(`⚠ verify: ${a.validation.warnings.length} warning(s) (fails \`ahp verify\`; \`--lenient\` to allow)`)}`);
+      for (const w of a.validation.warnings.slice(0, 3)) L.push(`      ${c.warn(w)}`);
     }
 
     if (r.drift.length) {
