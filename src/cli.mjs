@@ -56,6 +56,9 @@ PROJECTS
 
 MAINTENANCE
   compact [--keep N]     archive old sessions, keep the last N (default 3)
+  upgrade [--check]      git pull this checkout, then re-run the installer so
+                         every host picks up the new skill / MCP registration.
+                         --check only reports whether an update is available.
 
 GLOBAL
   --project <id|name>    override project detection (also AHP_PROJECT)
@@ -116,6 +119,7 @@ async function run(argv) {
     case "end": return cmdEnd(rest, home);
     case "project": return cmdProject(rest, home);
     case "compact": return cmdCompact(rest, home);
+    case "upgrade": return cmdUpgrade(rest);
     default:
       process.stderr.write(`ahp: unknown command "${cmd}" — try \`ahp help\`\n`);
       return 2;
@@ -360,6 +364,12 @@ function cmdVerify(rest, home) {
   if (errors.length || (!values.lenient && warnings.length)) return 1;
   process.stdout.write(`ok: ${stats.records} record(s), ${stats.promoted} promoted, ${stats.open} open, ${warnings.length} warning(s), ${notes.length} note(s)\n`);
   return 0;
+}
+
+async function cmdUpgrade(rest) {
+  const { values } = parse(rest, { check: { type: "boolean" } });
+  const { upgrade } = await import("./upgrade.mjs");
+  return upgrade({ check: !!values.check });
 }
 
 function cmdPath(rest, home) {

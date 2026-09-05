@@ -57,6 +57,23 @@ export AHP_WORKER_ID=claude AHP_MODEL=claude AHP_RUNTIME=claude-code
 Otherwise pass `--worker-id/--model/--runtime` on `ahp start`, or the identity is
 inherited from the last `handoff.start`.
 
+## Staying current
+
+```sh
+ahp upgrade          # git pull the checkout, then re-run the installer
+ahp upgrade --check  # just report whether an update is available
+```
+
+It fast-forwards this clone (refusing a dirty or diverged tree), refreshes the
+skill and every host's MCP registration, and prints what each host needs.
+
+Behaviour and bug fixes are live the moment the pull lands — every `ahp-mcp`
+call shells out to the checkout. Only a **new MCP tool or parameter** needs the
+host to respawn its `ahp-mcp` process (the tool list is read once, at start):
+`/mcp → agent-handoff → Reconnect` in the Claude Code terminal; the Claude
+desktop app's MCP panel has no per-server reconnect, so quit and reopen it;
+restart Codex / Cursor / VS Code / Windsurf.
+
 ## Retention
 
 `ahp compact --keep N` moves all but the last N sessions to

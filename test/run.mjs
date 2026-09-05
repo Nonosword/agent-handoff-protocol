@@ -421,6 +421,61 @@ test("read/log --worker filters to one agent; pickup flags a prior turn", () => 
   assert.match(pk.out, /1 handoff since/);
 });
 
+test("upgrade: --check reports behind/current, refuses a dirty or non-git checkout", () => {
+  const root = path.join(TMP, "upgrade"); fs.mkdirSync(root, { recursive: true });
+  const bare = path.join(root, "remote.git");
+  const work = path.join(root, "checkout");
+  sh("git", ["init", "-q", "--bare", bare]);
+  sh("git", ["clone", "-q", bare, work]);
+  const g = (...a) => sh("git", ["-C", work, ...a]);
+  g("config", "user.email", "t@t"); g("config", "user.name", "t");
+  fs.writeFileSync(path.join(work, "package.json"), JSON.stringify({ version: "0.4.0" }));
+  fs.writeFileSync(path.join(work, "install.sh"), "#!/bin/sh\necho refreshed hosts\n");
+  fs.chmodSync(path.join(work, "install.sh"), 0o755);
+  g("add", "-A"); g("commit", "-qm", "v0.4.0"); g("push", "-q", "origin", "HEAD");
+
+  const up = (args, extra = {}) => spawnSync(process.execPath, [AHP, "upgrade", ...args],
+    { env: { ...ENV, AHP_REPO: work, ...extra }, encoding: "utf8" });
+
+  // up to date
+  let r = up(["--check"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /already current — 0\.4\.0/);
+
+  // a newer commit on the remote → --check says "behind", doesn't apply it
+  const work2 = path.join(root, "other");
+  sh("git", ["clone", "-q", bare, work2]);
+  sh("git", ["-C", work2, "config", "user.email", "t@t"]);
+  sh("git", ["-C", work2, "config", "user.name", "t"]);
+  fs.writeFileSync(path.join(work2, "package.json"), JSON.stringify({ version: "0.4.1" }));
+  sh("git", ["-C", work2, "commit", "-aqm", "v0.4.1"]);
+  sh("git", ["-C", work2, "push", "-q", "origin", "HEAD"]);
+  r = up(["--check"]);
+  assert.match(r.stdout, /1 commit\(s\) behind/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(work, "package.json"), "utf8")).version, "0.4.0", "not applied");
+
+  // real upgrade: fast-forwards and runs the (fake) installer
+  r = up([]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /updated 0\.4\.0 → 0\.4\.1/);
+  assert.match(r.stdout, /refreshed hosts/);
+  assert.match(r.stdout, /new MCP tool or parameter/);
+  assert.match(r.stdout, /\/mcp .*Reconnect/);
+
+  // dirty tree → refuse
+  fs.writeFileSync(path.join(work, "dirt"), "x");
+  sh("git", ["-C", work, "add", "dirt"]);
+  r = up([]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /uncommitted changes/);
+
+  // not a git checkout → refuse
+  const plain = path.join(root, "plain"); fs.mkdirSync(plain);
+  r = up([], { AHP_REPO: plain });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /not a git checkout/);
+});
+
 test("nothing in src/ can reach the network (SPEC §11)", () => {
   const dir = path.join(REPO, "src");
   const banned = /\b(node:https?|node:net|node:dns|node:tls|node:dgram|require\(["']https?["']\)|fetch\s*\(|new\s+WebSocket|import\s+https?\s+from|from\s+["']node:(https?|net|dns|tls|dgram)["'])/;
@@ -428,10 +483,11 @@ test("nothing in src/ can reach the network (SPEC §11)", () => {
     const src = fs.readFileSync(path.join(dir, f), "utf8");
     assert.ok(!banned.test(src), `${f} references a network primitive`);
   }
-  // the only child_process users, and only for local commands
+  // the only child_process users, and only for local commands (git / ps / the
+  // bundled install.sh — never a network client)
   const users = fs.readdirSync(dir).filter((n) => n.endsWith(".mjs"))
     .filter((n) => /child_process/.test(fs.readFileSync(path.join(dir, n), "utf8")));
-  assert.deepEqual(users.sort(), ["git.mjs", "mcp.mjs", "worker-detect.mjs"]);
+  assert.deepEqual(users.sort(), ["git.mjs", "mcp.mjs", "upgrade.mjs", "worker-detect.mjs"]);
 });
 
 test("the hand-written validator and the JSON schema agree on the contract", () => {

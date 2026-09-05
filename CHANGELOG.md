@@ -5,6 +5,19 @@ The current version is in [`package.json`](./package.json). It follows
 required procedure is a major bump. Releases are cut when they are cut; a
 version without a date is the working state on `main`.
 
+## [Unreleased]
+
+- **`ahp upgrade`** — `git pull` this checkout (fast-forward only; refuses a
+  dirty or diverged tree), then re-run `install.sh --mode mcp` so the skill and
+  every host's MCP registration are refreshed in one step. `ahp upgrade
+  --check` only reports whether an update is available. Behaviour and bug fixes
+  are live immediately (every `ahp-mcp` call shells out to the checkout); only a
+  new MCP tool/parameter needs the host to respawn `ahp-mcp` — `/mcp → Reconnect`
+  in the Claude Code terminal, quit+reopen for the Claude desktop app (its MCP
+  panel has no per-server reconnect), a restart for the editors. `ahp upgrade`
+  prints the line for each. `src/upgrade.mjs`, dynamically imported.
+- The skill now lists `ahp read --field` and `ahp upgrade`.
+
 ## 0.4.0 — 2026-09-04
 
 One iteration after a week of real use: make the record unambiguous about *who*

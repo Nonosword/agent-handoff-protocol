@@ -101,9 +101,14 @@ it is required if `--gate` is not `pass`.
   — there is no `ahp_dashboard` MCP tool, so shell out for it.
 - `ahp status` — quick state check
 - `ahp log` — readable history
+- `ahp read --field <name>` (`ahp_read {field}`) — just one field across records,
+  e.g. `--field landmines --tail 5`, or `--field hazards` for landmines +
+  findings together ("what should I watch out for").
 - `ahp verify` — check the worklog is well-formed (strict by default: a quality
   warning fails it; `--lenient` / `ahp_verify {lenient:true}` for an old log).
   A "note:" line — e.g. a hard cutoff — is expected and never fails.
+- `ahp upgrade` — `git pull` this checkout and re-register with every host
+  (CLI-only). `--check` to just see if an update is available.
 - `ahp --help` — full reference
 
 ## Worker identity
