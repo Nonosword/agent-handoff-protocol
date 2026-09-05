@@ -34,6 +34,18 @@ All three carry the same guidance: **if the `ahp_*` MCP tools are present, use
 them; otherwise run the `ahp` CLI.** So an agent with both installed prefers the
 structured MCP path and falls back to the shell.
 
+## Seeing everything at once
+
+```sh
+ahp dashboard        # every registered project: baton holder + plan, worklog
+                     # counts, open intents, verify, git state, and drift
+ahp dashboard -w     # live view (-n S to set the interval, ctrl-c to exit)
+ahp dashboard --json # for scripts; exit 1 if any project errors or has drift
+```
+
+Unlike every other command it does **not** need to be run inside a repo — it
+reads the store, so it works from anywhere and covers all projects at once.
+
 ## Worker identity
 
 Set once in the agent's environment so every record is attributed:

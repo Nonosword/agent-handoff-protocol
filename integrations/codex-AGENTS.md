@@ -34,5 +34,13 @@ WHEN STOPPING (best-effort — you may be cut off):
      [--finding "<hazard for the next agent>"]
 
 Never cross a commit boundary with a dirty tree that no open intent describes.
+
+The worklog is session continuity, not project memory. A `landmine` / `next` /
+`finding` is about *this* work in flight. A fact that outlives the session (an
+invariant, a "never do X here") goes in the project's own docs — prefer editing
+an existing one — not the worklog.
+
+`ahp dashboard` (every project at once — baton, open intents, drift; the one
+command that runs outside a repo; `-w` live, `--json` for scripts; CLI only) /
 `ahp status` / `ahp log` / `ahp verify` / `ahp --help` for the rest.
 ```

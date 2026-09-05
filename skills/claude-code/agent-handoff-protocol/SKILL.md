@@ -66,6 +66,23 @@ ahp intent promote --id i-<date>-<letter> --commit <sha> --gate pass \
 Never leave the tree dirty across a commit boundary without an open intent that
 describes it.
 
+## What goes in the worklog — and what doesn't
+
+The worklog is **session continuity**, not project memory. Before you write a
+`landmine`, `next`, `finding` or `summary`, ask:
+
+1. **Does this outlive the session?** A fact about *this* work-in-progress — a
+   shortcut you took, the next step, a tree left dirty — belongs in the
+   worklog. A fact that will still be true in a month — an architectural
+   invariant, a "never do X here", a non-obvious constraint — belongs in the
+   **project's own docs** (`README`, `CONTRIBUTING`, an `docs/` note, a
+   checklist). Put it there and, if useful, point at it from `next`.
+2. **Can an existing doc absorb it?** Prefer editing the doc that already
+   covers the area over creating a new one.
+
+The worklog does not re-surface your earlier `landmines` on pickup by design —
+if it needs to survive, it is not a landmine, it is documentation.
+
 ## When stopping — DROP (best-effort; you may be cut off first)
 
 ```
@@ -77,9 +94,16 @@ it is required if `--gate` is not `pass`.
 
 ## Other
 
+- `ahp dashboard` — every project at once: baton holder + plan, worklog state,
+  open intents, `verify`, and drift (commits since the baton base with no
+  promotion). The one command that runs **outside** a repo, so it answers "what
+  is in flight anywhere". `-w` for a live view, `--json` for scripting. CLI only
+  — there is no `ahp_dashboard` MCP tool, so shell out for it.
 - `ahp status` — quick state check
 - `ahp log` — readable history
-- `ahp verify` — check the worklog is well-formed
+- `ahp verify` — check the worklog is well-formed (strict by default: a quality
+  warning fails it; `--lenient` / `ahp_verify {lenient:true}` for an old log).
+  A "note:" line — e.g. a hard cutoff — is expected and never fails.
 - `ahp --help` — full reference
 
 ## Worker identity

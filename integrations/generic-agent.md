@@ -31,6 +31,13 @@ Before stopping (you may be cut off without warning):
   `ahp end --reason limit --summary "<recap>" --gate pass --evidence "<proof>" [--finding "<hazard>"]`
 
 Never cross a commit boundary with a dirty tree that no open intent describes.
+
+The worklog is session continuity, not project memory. A landmine / next /
+finding is about the work in flight; a fact that outlives the session (an
+invariant, a "never do X") goes in the project's own docs, not the worklog.
+
+`ahp dashboard` shows every project at once — baton, open intents, drift — and
+is the one command that runs outside a repo (`-w` live, `--json` for scripts).
 ```
 
 ## Reference

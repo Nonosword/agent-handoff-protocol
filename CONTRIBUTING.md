@@ -35,6 +35,20 @@ Open an issue first. A change to `SPEC.md` §4–§9 or `schema/worklog.schema.j
 - bumps the version per SemVer (breaking record/procedure change = major) and
   updates `CHANGELOG.md`.
 
+## Touching `install.sh`
+
+`install.sh` must run on a **stock macOS shell** — `/bin/bash` is 3.2 (2007) and
+the coreutils are BSD. Assess every change for it, even one reported from Linux:
+
+- no `read -t` with a fractional argument (3.2 rejects it); no `${var,,}`,
+  associative arrays, `mapfile`, or `readlink -f`.
+- `2>/dev/null` before a risky redirect on the same command, not after
+  (`</dev/tty` on a machine with no controlling terminal errors otherwise).
+- BSD `sed` / `awk` semantics; `sed -i` needs an arg.
+
+Run `/bin/bash -n install.sh` and, ideally, `/bin/bash install.sh --dry-run`
+under the real 3.2 before pushing.
+
 Design constraints not to trade away without a strong reason:
 
 - Git is authoritative for *what changed*; the worklog never duplicates it.
@@ -52,5 +66,10 @@ npm run verify:examples
 npm install --no-save ajv@8 ajv-formats@3 && npm run schema:check
 ./install.sh --mode skill --dry-run
 ```
+
+Tidy the history first: squash the work-in-progress commits into a small set of
+coherent ones (one per topic), each of which builds and passes on its own. CI
+runs the suite on Linux (Node 20/22) and on macOS against the stock `/bin/bash`
+3.2 — an `install.sh` change is not done until the macOS job is green.
 
 No CLA. Contributions are under the repository's MIT license.

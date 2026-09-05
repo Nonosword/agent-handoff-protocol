@@ -39,6 +39,64 @@ jobs:
           ./install.sh --mode mcp --dry-run
           ./install.sh --uninstall --dry-run
 
+  # stock macOS ships /bin/bash 3.2 (2007) and BSD coreutils. The ubuntu job's
+  # bash is 5.x, so install.sh bugs that only bite on 3.2 (fractional `read -t`,
+  # `readlink -f`, redirect ordering) pass there and fail on a user's Mac.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: bash is 3.2
+        run: |
+          /bin/bash --version | head -1
+          case "$(/bin/bash -c 'echo $BASH_VERSINFO')" in 3) : ;; *) echo "expected bash 3.x"; exit 1 ;; esac
+
+      - name: install.sh parses and dry-runs under bash 3.2
+        run: |
+          /bin/bash -n install.sh
+          /bin/bash install.sh --mode mcp --dry-run --no-color </dev/null
+          /bin/bash install.sh --uninstall --dry-run --no-color </dev/null
+
+      - name: real install into a scratch HOME, re-run, uninstall
+        run: |
+          export HOME="$(mktemp -d)"; export XDG_DATA_HOME="$HOME/.local/share"
+          mkdir -p "$HOME/.claude"
+          /bin/bash install.sh --mode cli --no-color </dev/null
+          "$HOME/.local/bin/ahp" --version
+          "$HOME/.local/bin/ahp" dashboard >/dev/null
+          /bin/bash install.sh --mode cli --no-color </dev/null   # idempotent re-run
+          # link_bin must not clobber a foreign `ahp`
+          rm "$HOME/.local/bin/ahp"; printf '#!/bin/sh\necho foreign\n' > "$HOME/.local/bin/ahp"; chmod +x "$HOME/.local/bin/ahp"
+          /bin/bash install.sh --mode cli --no-color </dev/null
+          test "$("$HOME/.local/bin/ahp")" = foreign
+          rm "$HOME/.local/bin/ahp"
+          /bin/bash install.sh --uninstall --no-color </dev/null
+
+      - name: JSON-config host registration merges safely (Cursor/Windsurf) and uninstalls cleanly
+        run: |
+          export HOME="$(mktemp -d)"
+          mkdir -p "$HOME/.claude" "$HOME/.cursor" "$HOME/.codeium/windsurf"
+          printf '{"mcpServers":{"other-tool":{"command":"other"}}}' > "$HOME/.cursor/mcp.json"
+          printf '{"mcpServers":{"keep-me":{"command":"y"}}}' > "$HOME/.codeium/windsurf/mcp_config.json"
+          /bin/bash install.sh --mode mcp --no-color </dev/null
+          node -e 'const d=require(process.env.HOME+"/.cursor/mcp.json"); if(!d.mcpServers["other-tool"]||!d.mcpServers["agent-handoff"]) throw new Error("cursor merge broke")'
+          node -e 'const d=require(process.env.HOME+"/.codeium/windsurf/mcp_config.json"); if(!d.mcpServers["keep-me"]||!d.mcpServers["agent-handoff"]) throw new Error("windsurf merge broke")'
+          /bin/bash install.sh --mode mcp --no-color </dev/null   # idempotent re-run: no duplicate/rewrite
+          /bin/bash install.sh --uninstall --no-color </dev/null
+          node -e 'const d=require(process.env.HOME+"/.cursor/mcp.json"); if(d.mcpServers["agent-handoff"]||!d.mcpServers["other-tool"]) throw new Error("cursor uninstall broke")'
+          node -e 'const d=require(process.env.HOME+"/.codeium/windsurf/mcp_config.json"); if(d.mcpServers["agent-handoff"]||!d.mcpServers["keep-me"]) throw new Error("windsurf uninstall broke")'
+
+      - name: test suite on macOS
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          npm test
+          npm run verify:examples
+
   lint:
     runs-on: ubuntu-latest
     steps:
