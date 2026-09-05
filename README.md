@@ -4,7 +4,6 @@
 
 [![ci](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![spec: 0.3.0](https://img.shields.io/badge/spec-0.3.0-brightgreen.svg)](./SPEC.md)
 
 > An append-only worklog so rotated coding agents don't lose the thread when one
 > hits its usage limit and the next takes over. Kept in a store **outside** your
@@ -77,8 +76,10 @@ tools:
 
 - **cli** — agents run the `ahp` CLI; the skill / snippet teach the sequence.
 - **mcp** *(recommended)* — the above, plus `ahp-mcp` registered as an MCP
-  server with each detected host (`claude mcp add` / `codex mcp add`), so agents
-  call `ahp_pickup`, `ahp_start`, … directly. Structured arguments — no shell
+  server with each detected host — Claude Code / Codex via their own `mcp add`
+  CLI, Cursor / VS Code / Windsurf by merging into their MCP config file (never
+  touching anything else in it), Qoder via its `mcp add` CLI — so agents call
+  `ahp_pickup`, `ahp_start`, … directly. Structured arguments — no shell
   quoting of the free-text fields.
 
 An agent with both prefers the MCP tools and falls back to the CLI. `./install.sh
@@ -153,8 +154,9 @@ mid-session cutoff.
 
 ## Status
 
-`0.3.0` — first stable release. Record fields may still change before `1.0`. Follows SemVer;
-breaking changes are a major bump and land in [`CHANGELOG.md`](./CHANGELOG.md).
+Pre-1.0 — record fields may still change. Changes are additive where possible
+and land in [`CHANGELOG.md`](./CHANGELOG.md); a breaking record or procedure
+change would be a major bump.
 
 ## Origin
 

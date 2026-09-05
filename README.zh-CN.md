@@ -4,7 +4,6 @@
 
 [![ci](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/Nonosword/agent-handoff-protocol/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![spec: 0.3.0](https://img.shields.io/badge/spec-0.3.0-brightgreen.svg)](./SPEC.md)
 
 > 一份只追加的 worklog，让轮换工作的编码 agent 在某一个用量耗尽、下一个接手时不丢上下文。
 > worklog 存在项目**之外**的一个 store 里——你的仓库不会被碰。
@@ -60,9 +59,10 @@ cd ~/Repositories/agent-handoff-protocol
 要不要额外获得原生 `ahp_*` 工具：
 
 - **cli** —— agent 跑 `ahp` CLI；skill / 片段负责教流程。
-- **mcp**（推荐）—— 以上全部，外加把 `ahp-mcp` 通过 `claude mcp add` / `codex mcp add`
-  注册给每个检测到的 host，agent 直接调 `ahp_pickup`、`ahp_start` ……。结构化参数，
-  自由文本字段不用过 shell 转义。
+- **mcp**（推荐）—— 以上全部，外加把 `ahp-mcp` 注册给每个检测到的 host：Claude Code /
+  Codex 用各自的 `mcp add` CLI，Cursor / VS Code / Windsurf 合并进它们的 MCP 配置文件
+  （绝不动文件里其他内容），Qoder 用它的 `mcp add` CLI。agent 直接调 `ahp_pickup`、
+  `ahp_start` ……。结构化参数，自由文本字段不用过 shell 转义。
 
 两者都装时，agent 优先用 MCP 工具，没有则回退到 CLI。`./install.sh --mode cli|mcp`
 跳过询问 · `--dry-run` · `--no-color` · `--uninstall`。
@@ -131,8 +131,8 @@ ahp dashboard --json
 
 ## 状态
 
-`0.3.0` —— 首个稳定版。`1.0` 之前记录字段仍可能变动。遵循 SemVer；破坏性变更为 major，记入
-[`CHANGELOG.md`](./CHANGELOG.md)。
+`1.0` 之前 —— 记录字段仍可能变动。变更尽量保持加性，记入
+[`CHANGELOG.md`](./CHANGELOG.md)；破坏记录或流程的变更才是 major。
 
 ## 由来
 

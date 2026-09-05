@@ -1,6 +1,6 @@
 {
   "name": "agent-handoff-protocol",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Continuity for rotated coding agents: an append-only worklog in a central store, driven by the `ahp` CLI or an MCP server, with zero intrusion into your project repo.",
   "license": "MIT",
   "author": "Nonosword",
