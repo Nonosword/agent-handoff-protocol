@@ -6,14 +6,13 @@ import * as project from "./project.mjs";
 import { worklogPath, storeHome } from "./paths.mjs";
 import { readEntries, analyze } from "./worklog.mjs";
 
-function colors() {
-  const on = process.stdout.isTTY && !process.env.NO_COLOR;
+export function colors({ on = process.stdout.isTTY && !process.env.NO_COLOR } = {}) {
   const w = (c) => (s) => (on ? `[${c}m${s}[0m` : String(s));
   return {
     on,
     accent: w("38;5;39"), ok: w("32"), warn: w("33"), err: w("31"),
-    dim: w("90"), muted: w("38;5;250"), bold: w("1"),
-    held: w("38;5;39"), free: w("90")
+    rule: w("90"), subtle: w("38;5;250"), bold: w("1"),
+    held: w("38;5;39"), free: w("38;5;250")
   };
 }
 
@@ -90,48 +89,48 @@ function render(home, { footer = "", version = null } = {}) {
   const L = [];
   L.push("");
   const versionLabel = version ? ` v${version}` : "";
-  L.push(`  ${c.accent("Agent Handoff")}${versionLabel} ${c.dim("·")} ${rows.length} project${rows.length === 1 ? "" : "s"}   ${c.dim(home)}`);
-  L.push(`  ${c.dim("─".repeat(58))}`);
+  L.push(`  ${c.accent("Agent Handoff")}${versionLabel} ${c.subtle("·")} ${rows.length} project${rows.length === 1 ? "" : "s"}   ${c.subtle(home)}`);
+  L.push(`  ${c.rule("─".repeat(58))}`);
 
   if (rows.length === 0) {
-    L.push(`  ${c.dim("nothing registered yet — run `ahp status` inside a git repo")}`);
-    if (footer) L.push(`  ${c.dim(footer)}`);
+    L.push(`  ${c.subtle("nothing registered yet — run `ahp status` inside a git repo")}`);
+    if (footer) L.push(`  ${c.subtle(footer)}`);
     return { text: L.join("\n") + "\n", anyError: false };
   }
 
   let anyError = false;
   const held = rows.filter((r) => r.a.batonHeld).length;
-  L.push(`  ${c.muted(`${held} baton${held === 1 ? "" : "s"} held · ${rows.length - held} free`)}`);
+  L.push(`  ${c.subtle(`${held} baton${held === 1 ? "" : "s"} held · ${rows.length - held} free`)}`);
   L.push("");
 
   for (const [index, r] of rows.entries()) {
     if (index > 0) {
-      L.push(`  ${c.dim("─".repeat(58))}`);
+      L.push(`  ${c.rule("─".repeat(58))}`);
       L.push("");
     }
     const { p, a, g } = r;
-    L.push(`  ${c.bold(p.name)}  ${c.dim(`[${p.id}]`)}`);
+    L.push(`  ${c.bold(p.name)}  ${c.subtle(`[${p.id}]`)}`);
 
     if (g.reachable === false) {
-      L.push(`    ${c.warn("!")} ${c.dim(g.root ?? "path unknown")} ${c.dim("— not reachable from here")}`);
+      L.push(`    ${c.warn("!")} ${c.subtle(g.root ?? "path unknown")} ${c.subtle("— not reachable from here")}`);
     } else {
-      const tree = g.clean === null ? c.dim("?") : g.clean ? c.dim("clean") : c.warn("DIRTY");
-      L.push(`    ${c.dim(g.root)}   ${c.dim(g.branch ?? "?")}  ${tree}  ${c.dim("@")} ${c.dim(g.head ?? "?")}`);
+      const tree = g.clean === null ? c.subtle("?") : g.clean ? c.subtle("clean") : c.warn("DIRTY");
+      L.push(`    ${c.subtle(g.root)}   ${c.subtle(g.branch ?? "?")}  ${tree}  ${c.subtle("@")} ${c.subtle(g.head ?? "?")}`);
     }
 
     if (a.count === 0) {
-      L.push(`    ${c.free("○")} ${c.dim("worklog empty — never used")}`);
+      L.push(`    ${c.free("○")} ${c.subtle("worklog empty — never used")}`);
     } else {
       if (a.batonHeld) {
         const s = r.staleBaton ? c.warn(` (stale — no activity ${ago(a.records.at(-1).at)})`) : "";
-        L.push(`    ${c.held("●")} held by ${c.bold(workerLabel(a.batonWorker))}  ${c.dim(ago(a.lastStart.at))}${s}`);
-        if (a.lastStart.plan) L.push(`      ${c.dim(a.lastStart.plan.slice(0, 92))}`);
+        L.push(`    ${c.held("●")} held by ${c.bold(workerLabel(a.batonWorker))}  ${c.subtle(ago(a.lastStart.at))}${s}`);
+        if (a.lastStart.plan) L.push(`      ${c.subtle(a.lastStart.plan.slice(0, 92))}`);
       } else {
-        L.push(`    ${c.free("○")} ${c.dim("baton free")}`);
+        L.push(`    ${c.free("○")} ${c.subtle("baton free")}`);
       }
-      L.push(`    ${c.dim(`${a.count} records · seq ${a.lastSeq} · ${a.promotes.length} promoted · ${a.openIntents.length} open${r.updated ? ` · ${ago(r.updated)}` : ""}`)}`);
+      L.push(`    ${c.subtle(`${a.count} records · seq ${a.lastSeq} · ${a.promotes.length} promoted · ${a.openIntents.length} open${r.updated ? ` · ${ago(r.updated)}` : ""}`)}`);
       if (a.openIntents.length) {
-        L.push(`      ${c.dim("open:")} ${a.openIntents.map((i) => i.intentId).join(", ")}`);
+        L.push(`      ${c.subtle("open:")} ${a.openIntents.map((i) => i.intentId).join(", ")}`);
       }
     }
 
@@ -157,7 +156,7 @@ function render(home, { footer = "", version = null } = {}) {
     L.push("");
   }
 
-  if (footer) L.push(`  ${c.dim(footer)}`);
+  if (footer) L.push(`  ${c.subtle(footer)}`);
   return { text: L.join("\n") + "\n", anyError };
 }
 

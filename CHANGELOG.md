@@ -7,6 +7,10 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.4.2 — 2026-09-07
+
+- Dashboard auxiliary text is now a semantic `subtle` token using neutral ANSI-256 `38;5;250` in every terminal, rather than relying on Tabby's overly dark ANSI bright-black mapping. Separator rules remain a separate ANSI `90` `rule` token, preserving hierarchy without lowering the text contrast.
+
 ## 0.4.1 — 2026-09-07
 
 - **`ahp upgrade`** — `git pull` this checkout (fast-forward only; refuses a

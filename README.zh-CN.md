@@ -99,6 +99,9 @@ ahp dashboard -w    # 实时视图——alternate screen 刷新,ctrl-c 退出
 ahp dashboard --json
 ```
 
+
+Dashboard 对所有辅助文字统一使用中性 ANSI-256 灰阶 `38;5;250`，不再依赖 Tabby 过暗的 ANSI bright-black 映射。分隔线仍使用独立的 ANSI `90`，保留更低的视觉权重。
+
 ## 记录类型
 
 四种。完整字段表见 [`SPEC.md`](./SPEC.md) §5；机器契约见

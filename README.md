@@ -119,6 +119,9 @@ ahp dashboard -w    # live view — refreshes on the alternate screen, ctrl-c to
 ahp dashboard --json
 ```
 
+
+Dashboard uses neutral ANSI-256 grey `38;5;250` for all auxiliary text, so Tabby does not depend on its unusually dark ANSI bright-black mapping. Separator rules remain a separate ANSI `90` token, preserving their lower visual weight.
+
 ## Records
 
 Four types. Full field tables in [`SPEC.md`](./SPEC.md) §5; machine contract in

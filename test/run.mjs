@@ -12,6 +12,7 @@ import { canonicalWorkerId, WORKERS } from "../src/worker-detect.mjs";
 import { project, makeSessionId, assertCanOpen, assertCanPromote, assertCanEnd } from "../src/lifecycle.mjs";
 import { REQUIRED, RECORD_TYPES, GATES, END_REASONS } from "../src/validate.mjs";
 import { explainStoreFsError } from "../src/storage-errors.mjs";
+import { colors as dashboardColors } from "../src/dashboard.mjs";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const AHP = path.join(REPO, "bin", "ahp");
@@ -57,6 +58,18 @@ function commit(dir, msg) {
 
 const A = mkrepo("projA");
 const B = mkrepo("projB");
+
+test("dashboard uses one neutral ANSI-256 subtle colour", () => {
+  const terminal = colors => ({ subtle: colors.subtle("x"), rule: colors.rule("x"), free: colors.free("○") });
+  const defaultTheme = dashboardColors({ on: true, env: { TERM_PROGRAM: "Apple_Terminal" } });
+  const tabby = dashboardColors({ on: true, env: { TERM_PROGRAM: "Tabby" } });
+  assert.deepEqual(terminal(defaultTheme), {
+    subtle: "\x1b[38;5;250mx\x1b[0m",
+    rule: "\x1b[90mx\x1b[0m",
+    free: "\x1b[38;5;250m○\x1b[0m"
+  });
+  assert.deepEqual(terminal(tabby), terminal(defaultTheme));
+});
 
 test("status on a fresh project is read-only and reports empty", () => {
   const r = ahp(["status"], A);
