@@ -27,6 +27,12 @@ Either way the steps and their order are the same. Below, each CLI command maps
 to the same-named MCP tool (`ahp start …` → `ahp_start`, `ahp intent promote …`
 → `ahp_intent_promote`).
 
+A required action counts only after explicit success (CLI exit 0; MCP result not
+marked as an error). If `pickup` or `start` fails, keep code, docs and Git
+unchanged. Preserve the exact error, perform only read-only diagnosis, follow
+its permission/mount/sandbox guidance, then retry. Do not silently switch to an
+in-repo worklog or proceed from memory.
+
 ## At the start of a session — PICKUP (do this before any change)
 
 ```

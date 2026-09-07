@@ -267,6 +267,16 @@ this object.
 
 ### 7.1 Pickup — every worker, every session
 
+A required AHP action is complete only when the implementation explicitly
+reports success (CLI exit 0; an MCP result that is not an error). If `pickup`
+or `start` fails, the worker MUST keep project files, documentation and VCS
+state unchanged. It MAY perform read-only diagnosis: preserve the exact error,
+inspect the reported target's process identity, ownership/mode/ACL and mount
+state, request store access from the execution sandbox when needed, then retry
+the same action. It MUST NOT silently switch storage bindings, pretend the
+record exists, or continue from memory. If an append reports that its outcome is
+uncertain, inspect the worklog before retrying so the record is not duplicated.
+
 A worker MUST, before making any change:
 
 1. Read the worklog. Find the last `handoff.start` and its `base.commit`; note the
@@ -305,6 +315,7 @@ A worker MUST, before making any change:
 | Situation | Required handling |
 | --- | --- |
 | Worklog file absent | Treat as a fresh start. First worker creates it with `continuesFrom: null`. |
+| Store access denied | The implementation identifies the denied operation and target, reports available process/owner/mode/access evidence, distinguishes likely file/directory permissions, read-only mount, or sandbox policy without claiming certainty, and gives a retry path. The worker follows §7.1's fail-closed rule. |
 | Worklog not valid JSONL | Stop. Do not append. Surface the corrupt line to the operator. |
 | `seq` not strictly increasing | Stop. The log was edited or written concurrently. Operator disposition required. |
 | Two `handoff.start` with no `handoff.end` between | Normal after a cutoff. The later one is authoritative; the earlier worker's work is reconstructed via §7.1 steps 2–4. |

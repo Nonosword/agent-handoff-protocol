@@ -4,12 +4,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseJsonl, validateRecords } from "./validate.mjs";
 import { project } from "./lifecycle.mjs";
+import { explainStoreFsError } from "./storage-errors.mjs";
 
 const LOCK_STALE_MS = 60_000;
 
 export function readText(worklogFile) {
   try { return fs.readFileSync(worklogFile, "utf8"); }
-  catch (e) { if (e.code === "ENOENT") return ""; throw e; }
+  catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw explainStoreFsError(error, {
+      operation: "read the project worklog",
+      target: worklogFile,
+      effect: "No state was changed; the worklog could not be read."
+    });
+  }
 }
 
 export function readEntries(worklogFile) {
@@ -41,14 +49,17 @@ export function analyze(entries) {
 function acquireLock(lockFile) {
   fs.mkdirSync(path.dirname(lockFile), { recursive: true });
   for (let attempt = 0; attempt < 100; attempt += 1) {
+    let fd;
     try {
-      const fd = fs.openSync(lockFile, "wx", 0o600);
+      fd = fs.openSync(lockFile, "wx", 0o600);
       fs.writeSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
       fs.fsyncSync(fd);
-      fs.closeSync(fd);
       return;
     } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+      if (e.code !== "EEXIST") {
+        try { fs.rmSync(lockFile, { force: true }); } catch { /* best effort */ }
+        throw e;
+      }
       // stale-lock reclaim: dead pid, or older than LOCK_STALE_MS
       let stale = false;
       try {
@@ -60,6 +71,8 @@ function acquireLock(lockFile) {
       } catch { stale = true; }
       if (stale) { try { fs.rmSync(lockFile, { force: true }); } catch { /* race */ } continue; }
       sleepMs(20);
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
     }
   }
   throw new Error(`could not acquire worklog lock: ${lockFile}`);
@@ -85,8 +98,16 @@ function sleepMs(ms) {
 // `derive(full)` runs after `seq`/`at` are assigned and its result is merged in
 // — for fields computed from the final seq (e.g. a handoff.start's sessionId).
 export function appendRecord(worklogFile, lockFile, record, { now = () => new Date().toISOString(), derive } = {}) {
-  fs.mkdirSync(path.dirname(worklogFile), { recursive: true });
-  acquireLock(lockFile);
+  try {
+    fs.mkdirSync(path.dirname(worklogFile), { recursive: true });
+    acquireLock(lockFile);
+  } catch (error) {
+    throw explainStoreFsError(error, {
+      operation: "prepare the worklog write",
+      target: worklogFile,
+      effect: "No worklog record was written."
+    });
+  }
   try {
     let entries;
     try { entries = readEntries(worklogFile); }
@@ -100,9 +121,23 @@ export function appendRecord(worklogFile, lockFile, record, { now = () => new Da
     }
     if (derive) Object.assign(full, derive(full));
     const line = `${JSON.stringify(full)}\n`;
-    const fd = fs.openSync(worklogFile, "a");
-    try { fs.writeSync(fd, line); fs.fsyncSync(fd); }
-    finally { fs.closeSync(fd); }
+    let fd;
+    let writeStarted = false;
+    try {
+      fd = fs.openSync(worklogFile, "a");
+      writeStarted = fs.writeSync(fd, line) > 0;
+      fs.fsyncSync(fd);
+    } catch (error) {
+      throw explainStoreFsError(error, {
+        operation: "append and sync the worklog record",
+        target: worklogFile,
+        effect: writeStarted
+          ? "The append may have reached the file. Run `ahp status` or `ahp verify` before retrying to avoid a duplicate record."
+          : "No record bytes were written."
+      });
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
     return full;
   } finally {
     releaseLock(lockFile);

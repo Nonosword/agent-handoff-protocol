@@ -7,6 +7,8 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.4.1 — 2026-09-07
+
 - **`ahp upgrade`** — `git pull` this checkout (fast-forward only; refuses a
   dirty or diverged tree), then re-run `install.sh --mode mcp` so the skill and
   every host's MCP registration are refreshed in one step. `ahp upgrade
@@ -17,6 +19,23 @@ version without a date is the working state on `main`.
   panel has no per-server reconnect), a restart for the editors. `ahp upgrade`
   prints the line for each. `src/upgrade.mjs`, dynamically imported.
 - The skill now lists `ahp read --field` and `ahp upgrade`.
+- Read commands no longer auto-register an unseen Git checkout; `pickup` is
+  genuinely read-only even when the AHP store cannot be written. The first
+  write command registers the project.
+- Permission failures now name the operation and target, show available
+  process/owner/mode/access evidence, classify likely file/directory,
+  read-only-mount, or sandbox causes conservatively, report append certainty,
+  and give the agent a concrete diagnosis/retry path. Malformed or unreadable
+  registries fail closed instead of being treated as empty.
+- Agent instructions clarify that required AHP operations count only after
+  explicit success; a failed `pickup` / `start` freezes project mutations
+  while the agent diagnoses and retries, with no silent storage fallback.
+- `pickup` now checks promoted commits for actual Git reachability, avoiding
+  false warnings for commits before the latest handoff base.
+- Dashboard: dynamic version in the title, blue non-bold product name, brighter
+  baton summary, and separator rules between projects. JSON includes `version`.
+- 34 end-to-end tests cover the new read-only, diagnostics, registry,
+  reachability, version, and separator behavior.
 
 ## 0.4.0 — 2026-09-04
 

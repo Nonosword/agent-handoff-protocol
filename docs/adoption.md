@@ -15,9 +15,10 @@ one file per project.
 
 ## Per project — nothing to do
 
-The first `ahp` command run inside a Git repo auto-registers it, keyed by the
-repo's `origin` remote (or its path if there's no remote). `ahp project list`
-shows what's registered; `ahp project rename <id> <name>` sets a friendly name.
+Read commands resolve a Git repo without writing to the store. Its first AHP
+write auto-registers it, keyed by the repo's `origin` remote (or its path if
+there's no remote). `ahp project list` shows what's registered; `ahp project
+rename <id> <name>` sets a friendly name.
 
 If you *want* the worklog in the repo instead (co-located, travels with a
 tarball), that's a valid layout too — see [SPEC §4.3](../SPEC.md). Add

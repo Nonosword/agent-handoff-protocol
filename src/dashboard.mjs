@@ -12,7 +12,7 @@ function colors() {
   return {
     on,
     accent: w("38;5;39"), ok: w("32"), warn: w("33"), err: w("31"),
-    dim: w("90"), bold: w("1"),
+    dim: w("90"), muted: w("38;5;250"), bold: w("1"),
     held: w("38;5;39"), free: w("90")
   };
 }
@@ -84,12 +84,13 @@ function toJson(rows) {
   }));
 }
 
-function render(home, { footer = "" } = {}) {
+function render(home, { footer = "", version = null } = {}) {
   const rows = project.list(home).map((p) => gather(p, home));
   const c = colors();
   const L = [];
   L.push("");
-  L.push(`  ${c.accent(c.bold("Agent Handoff"))}  ${c.dim("·")}  ${rows.length} project${rows.length === 1 ? "" : "s"}   ${c.dim(home)}`);
+  const versionLabel = version ? ` v${version}` : "";
+  L.push(`  ${c.accent("Agent Handoff")}${versionLabel} ${c.dim("·")} ${rows.length} project${rows.length === 1 ? "" : "s"}   ${c.dim(home)}`);
   L.push(`  ${c.dim("─".repeat(58))}`);
 
   if (rows.length === 0) {
@@ -100,10 +101,14 @@ function render(home, { footer = "" } = {}) {
 
   let anyError = false;
   const held = rows.filter((r) => r.a.batonHeld).length;
-  L.push(`  ${c.dim(`${held} baton${held === 1 ? "" : "s"} held · ${rows.length - held} free`)}`);
+  L.push(`  ${c.muted(`${held} baton${held === 1 ? "" : "s"} held · ${rows.length - held} free`)}`);
   L.push("");
 
-  for (const r of rows) {
+  for (const [index, r] of rows.entries()) {
+    if (index > 0) {
+      L.push(`  ${c.dim("─".repeat(58))}`);
+      L.push("");
+    }
     const { p, a, g } = r;
     L.push(`  ${c.bold(p.name)}  ${c.dim(`[${p.id}]`)}`);
 
@@ -160,21 +165,21 @@ function sleep(ms) {
   return new Promise((r) => { setTimeout(r, ms); });
 }
 
-export async function dashboard({ home = storeHome(), json = false, watch = false, interval = 5 } = {}) {
+export async function dashboard({ home = storeHome(), version = null, json = false, watch = false, interval = 5 } = {}) {
   if (json) {
     const rows = project.list(home).map((p) => gather(p, home));
-    process.stdout.write(`${JSON.stringify({ store: home, projects: toJson(rows) }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ version, store: home, projects: toJson(rows) }, null, 2)}\n`);
     return 0;
   }
 
   if (!watch) {
-    const { text, anyError } = render(home);
+    const { text, anyError } = render(home, { version });
     process.stdout.write(text);
     return anyError ? 1 : 0;
   }
 
   if (!process.stdout.isTTY) {
-    const { text, anyError } = render(home, { footer: "(--watch needs a TTY; showing one snapshot)" });
+    const { text, anyError } = render(home, { version, footer: "(--watch needs a TTY; showing one snapshot)" });
     process.stdout.write(text);
     return anyError ? 1 : 0;
   }
@@ -192,7 +197,7 @@ export async function dashboard({ home = storeHome(), json = false, watch = fals
   try {
     while (running) {
       const now = new Date().toTimeString().slice(0, 8);
-      const { text } = render(home, { footer: `updated ${now} · every ${every}s · ctrl-c to exit` });
+      const { text } = render(home, { version, footer: `updated ${now} · every ${every}s · ctrl-c to exit` });
       out.write(`\x1b[H\x1b[2J${text}`);
       // wake early on resize so the view reflows promptly
       let woke = false;

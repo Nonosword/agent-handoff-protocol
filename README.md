@@ -101,8 +101,14 @@ ahp intent promote --id i-0828-a --commit 9f2e1df --gate pass \
 ahp end     --reason limit --summary "1 of 3 commits landed" --gate pass --evidence "194 pass"
 ```
 
-The first `ahp` command in a repo auto-registers it. `ahp` fills in `seq`, the
+Read commands such as `status` and `pickup` never write merely to discover a
+project. The first write command auto-registers it. `ahp` fills in `seq`, the
 timestamp, the base commit and tree state from Git — you supply the meaning.
+
+If a required AHP action fails, it did not happen. Keep the project unchanged,
+follow the error's target/evidence/next-step diagnostics, obtain filesystem or
+sandbox access as needed, and retry until the CLI exits 0 (or the MCP result is
+not an error). Never silently substitute an in-repo worklog.
 
 From **anywhere** — every project at a glance:
 

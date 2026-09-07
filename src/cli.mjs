@@ -106,7 +106,13 @@ async function run(argv) {
         interval: { type: "string", short: "n" }
       });
       const { dashboard } = await import("./dashboard.mjs");
-      return dashboard({ home, json: values.json, watch: values.watch, interval: values.interval ? Number(values.interval) : 5 });
+      return dashboard({
+        home,
+        version: PKG.version,
+        json: values.json,
+        watch: values.watch,
+        interval: values.interval ? Number(values.interval) : 5
+      });
     }
     case "status": return cmdStatus(rest, home);
     case "pickup": return cmdPickup(rest, home);
@@ -140,9 +146,9 @@ function parse(rest, options, { allowPositionals = false } = {}) {
   return parseArgs({ args: rest, options: { ...GLOBAL_OPTS, ...options }, allowPositionals, strict: true });
 }
 
-function resolveProject(values) {
+function resolveProject(values, { registerMissing = false } = {}) {
   const cwd = values.cwd ? path.resolve(values.cwd) : process.cwd();
-  return project.resolve({ cwd, project: values.project ?? null, home: storeHome() });
+  return project.resolve({ cwd, project: values.project ?? null, home: storeHome(), registerMissing });
 }
 
 function gitView(root) {
@@ -220,12 +226,11 @@ function cmdStatus(rest, home) {
     }) + "\n");
     return analysis.validation.errors.length ? 1 : 0;
   }
-  if (proj.source === "autoregistered") process.stdout.write(`(auto-registered project "${proj.name}" [${proj.id}])\n\n`);
   process.stdout.write(renderStatus({ project: proj, git: g, analysis }) + "\n");
   return analysis.validation.errors.length ? 1 : 0;
 }
 
-function reconcileView(analysis, sinceCommits) {
+function reconcileView(analysis, root) {
   const commitToIntent = new Map();
   const commitToIntentLong = new Map();
   for (const p of analysis.promotes) {
@@ -234,10 +239,13 @@ function reconcileView(analysis, sinceCommits) {
       commitToIntentLong.set(c.slice(0, 7), p.intentId);
     }
   }
-  const sinceShorts = new Set(sinceCommits.map((c) => c.short));
-  const danglingPromotes = analysis.promotes.filter(
-    (p) => (p.commits ?? []).length && !(p.commits ?? []).some((c) => sinceShorts.has(c) || sinceShorts.has(c.slice(0, 7)))
-  );
+  // Promotions commonly predate the latest handoff base, so absence from
+  // base..HEAD does not mean a commit is unreachable. Ask Git directly.
+  const danglingPromotes = root
+    ? analysis.promotes.filter(
+        (p) => (p.commits ?? []).length && !(p.commits ?? []).some((c) => git.isAncestor(root, c, "HEAD"))
+      )
+    : [];
   return { commitToIntent, commitToIntentLong, danglingPromotes };
 }
 
@@ -253,7 +261,7 @@ function cmdPickup(rest, home) {
       sinceCommits = git.logRange(root, analysis.lastStart.base.commit, "HEAD");
     }
   }
-  const reconcile = reconcileView(analysis, sinceCommits);
+  const reconcile = reconcileView(analysis, root);
   // "you've been here before" — resolve the prospective picker's identity and
   // find where it last held the baton, without moving the pickup anchor.
   const meId = workerId(worker(values));
@@ -387,7 +395,7 @@ function cmdStart(rest, home) {
   });
   if (!values.plan) throw new Error("start requires --plan");
   assertGate(values.gate, false);
-  const proj = resolveProject(values);
+  const proj = resolveProject(values, { registerMissing: true });
   const root = requireProjectGit(proj);
   const g = gitView(root);
   const analysis = analyze(readEntries(proj.worklog));
@@ -423,7 +431,7 @@ function intentOpen(rest, home) {
     ref: { type: "string", multiple: true }, scope: { type: "string", multiple: true }
   });
   for (const f of ["id", "title", "intended"]) if (!values[f]) throw new Error(`intent open requires --${f}`);
-  const proj = resolveProject(values);
+  const proj = resolveProject(values, { registerMissing: true });
   const analysis = analyze(readEntries(proj.worklog));
   assertCanOpen(analysis.records, values.id);
   const sid = currentSessionId(analysis);
@@ -449,7 +457,7 @@ function intentPromote(rest, home) {
   for (const f of ["id", "actual"]) if (!values[f]) throw new Error(`intent promote requires --${f}`);
   assertGate(values.gate, false);
   const commits = values.commit ?? [];
-  const proj = resolveProject(values);
+  const proj = resolveProject(values, { registerMissing: true });
   const analysis = analyze(readEntries(proj.worklog));
   assertCanPromote(analysis.records, { id: values.id, gate: values.gate, commits, landmines: values.landmine ?? [] });
   const sid = currentSessionId(analysis);
@@ -478,7 +486,7 @@ function cmdEnd(rest, home) {
     throw new Error("--reason must be limit | task-done | blocked | handoff-requested");
   }
   assertGate(values.gate, false);
-  const proj = resolveProject(values);
+  const proj = resolveProject(values, { registerMissing: true });
   const root = requireProjectGit(proj);
   const g = gitView(root);
   const analysis = analyze(readEntries(proj.worklog));
@@ -549,7 +557,7 @@ function cmdProject(rest, home) {
 function cmdCompact(rest, home) {
   const { values } = parse(rest, { keep: { type: "string" } });
   const keep = values.keep ? Number(values.keep) : 3;
-  const proj = resolveProject(values);
+  const proj = resolveProject(values, { registerMissing: true });
   const entries = readEntries(proj.worklog);
   if (entries.length === 0) { process.stdout.write("(nothing to compact)\n"); return 0; }
 

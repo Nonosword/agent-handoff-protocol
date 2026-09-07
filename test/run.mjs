@@ -11,10 +11,12 @@ import { spawnSync } from "node:child_process";
 import { canonicalWorkerId, WORKERS } from "../src/worker-detect.mjs";
 import { project, makeSessionId, assertCanOpen, assertCanPromote, assertCanEnd } from "../src/lifecycle.mjs";
 import { REQUIRED, RECORD_TYPES, GATES, END_REASONS } from "../src/validate.mjs";
+import { explainStoreFsError } from "../src/storage-errors.mjs";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const AHP = path.join(REPO, "bin", "ahp");
 const MCP = path.join(REPO, "bin", "ahp-mcp");
+const PKG = JSON.parse(fs.readFileSync(path.join(REPO, "package.json"), "utf8"));
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "ahp-test-"));
 const HOME = path.join(TMP, "store");
@@ -56,11 +58,77 @@ function commit(dir, msg) {
 const A = mkrepo("projA");
 const B = mkrepo("projB");
 
-test("status on a fresh project auto-registers and reports empty", () => {
+test("status on a fresh project is read-only and reports empty", () => {
   const r = ahp(["status"], A);
   assert.equal(r.code, 0, r.err);
-  assert.match(r.out, /auto-registered/);
   assert.match(r.out, /worklog\s+empty/);
+  assert.equal(fs.existsSync(path.join(HOME, "projects.json")), false);
+});
+
+test("read commands need no store write access; a denied write explains how to close the loop", () => {
+  if (process.platform === "win32") return;
+  const P = mkrepo("projReadonly");
+  const store = path.join(TMP, "readonly-store");
+  fs.mkdirSync(store, { recursive: true });
+  fs.chmodSync(store, 0o555);
+  const env = { ...ENV, AHP_HOME: store };
+  const run = (args) => {
+    const r = spawnSync(process.execPath, [AHP, ...args], { cwd: P, env, encoding: "utf8", shell: false });
+    return { code: r.status ?? -1, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim() };
+  };
+  try {
+    for (const args of [["status"], ["pickup"], ["path"], ["project", "current"]]) {
+      const r = run(args);
+      assert.equal(r.code, 0, `${args.join(" ")}: ${r.err}`);
+    }
+    assert.deepEqual(fs.readdirSync(store), [], "read commands must not auto-register");
+
+    const denied = run(["start", "--plan", "p", "--gate", "pass", "--evidence", "gate passed"]);
+    assert.equal(denied.code, 1);
+    assert.match(denied.err, /\[AHP_STORE_IO_FAILED\]/);
+    assert.match(denied.err, /not an AHP policy decision/);
+    assert.match(denied.err, /process uid:gid .* owner .* mode .* R\/W/);
+    assert.match(denied.err, /agent next: inspect/);
+    assert.match(denied.err, /request sandbox permission/);
+    assert.deepEqual(fs.readdirSync(store), [], "denied registration must not leave a temp file");
+  } finally {
+    fs.chmodSync(store, 0o755);
+  }
+});
+
+test("store diagnostics classify from evidence without pretending certainty", () => {
+  const target = path.join(TMP, "diagnostic-target");
+  const sandboxLike = Object.assign(new Error("blocked"), {
+    code: "EPERM", syscall: "open", path: `${target}.tmp`
+  });
+  const sandboxMessage = explainStoreFsError(sandboxLike, {
+    operation: "update the registry", target
+  }).message;
+  assert.match(sandboxMessage, /execution sandbox\/security policy or a filesystem-specific restriction/);
+  assert.match(sandboxMessage, /parent write probe passed/);
+  assert.match(sandboxMessage, new RegExp(`target: ${target.replaceAll("/", "\\/")}`));
+  assert.match(sandboxMessage, new RegExp(`during open at ${target.replaceAll("/", "\\/")}\\.tmp`));
+
+  const readOnly = Object.assign(new Error("read only"), { code: "EROFS", syscall: "open", path: target });
+  assert.match(explainStoreFsError(readOnly, { operation: "append", target }).message, /read-only filesystem or mount/);
+
+  const noSpace = Object.assign(new Error("full"), { code: "ENOSPC", syscall: "write", path: target });
+  assert.match(explainStoreFsError(noSpace, { operation: "append", target }).message, /out of free space/);
+});
+
+test("a malformed registry fails closed and is never treated as empty", () => {
+  const P = mkrepo("projBadRegistry");
+  const store = path.join(TMP, "bad-registry-store");
+  fs.mkdirSync(store, { recursive: true });
+  const file = path.join(store, "projects.json");
+  const original = "{ definitely not json }\n";
+  fs.writeFileSync(file, original);
+  const env = { ...ENV, AHP_HOME: store };
+  const r = spawnSync(process.execPath, [AHP, "status"], { cwd: P, env, encoding: "utf8", shell: false });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /\[AHP_REGISTRY_INVALID\]/);
+  assert.match(r.stderr, /refuses to treat a corrupt registry as empty or overwrite it/);
+  assert.equal(fs.readFileSync(file, "utf8"), original);
 });
 
 test("start requires --plan and --gate", () => {
@@ -191,7 +259,7 @@ test("project B worklog is isolated from A", () => {
   const pathA = ahp(["path"], A).out;
   const pathB = ahp(["path"], B).out;
   assert.notEqual(pathA, pathB);
-  assert.match(ahp(["project", "list"], A).out, /projA[\s\S]*projB/);
+  assert.doesNotMatch(ahp(["project", "list"], A).out, /projB/);
 });
 
 test("the project repo is never modified", () => {
@@ -205,6 +273,21 @@ test("pickup shows commits since base and reconciles them", () => {
   assert.match(r.out, /Commits since .* → HEAD/);
   assert.match(r.out, /feat: core.*i-1/s);
   assert.match(r.out, /session ended cleanly \(limit\)/);
+});
+
+test("pickup does not call a promoted commit unreachable merely because it predates the latest base", () => {
+  const P = mkrepo("projReachable");
+  ahp(["start", "--plan", "first", "--gate", "pass", "--evidence", "gate passed"], P);
+  ahp(["intent", "open", "--id", "i-first", "--title", "first", "--intended", "land one commit"], P);
+  const sha = commit(P, "reachable promoted commit");
+  ahp(["intent", "promote", "--id", "i-first", "--commit", sha, "--gate", "pass", "--actual", "landed"], P);
+  ahp(["end", "--reason", "task-done", "--summary", "first done", "--gate", "pass", "--evidence", "gate passed"], P);
+  ahp(["start", "--plan", "second", "--gate", "pass", "--evidence", "gate passed"], P);
+  ahp(["end", "--reason", "task-done", "--summary", "second done", "--gate", "pass", "--evidence", "gate passed"], P);
+
+  const r = ahp(["pickup"], P);
+  assert.equal(r.code, 0, r.err);
+  assert.doesNotMatch(r.out, /Promotions naming a commit not reachable from HEAD/);
 });
 
 test("double promote is refused", () => {
@@ -304,10 +387,12 @@ test("MCP array args (commits/refs/landmines/findings) reach the CLI", () => {
 test("dashboard runs from outside any repo and lists projects", () => {
   const r = ahp(["dashboard"], os.tmpdir());
   assert.ok(r.code === 0 || r.code === 1, r.err);
-  assert.match(r.out, /Agent Handoff/);
+  assert.match(r.out, new RegExp(`Agent Handoff v${PKG.version.replaceAll(".", "\\.")} ·`));
   assert.match(r.out, /projA/);
+  assert.ok(r.out.split("\n").filter((line) => line.includes("─".repeat(58))).length >= 2);
   const j = ahp(["dashboard", "--json"], os.tmpdir());
   const parsed = JSON.parse(j.out);
+  assert.equal(parsed.version, PKG.version);
   assert.ok(Array.isArray(parsed.projects));
 });
 

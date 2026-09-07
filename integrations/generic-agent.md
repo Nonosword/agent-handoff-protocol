@@ -13,6 +13,12 @@ manages it; the repo is never touched.
 If `ahp_*` MCP tools are available, prefer them over the `ahp` shell commands
 (structured args, no quoting of the free-text fields). `ahp <verb>` ↔ `ahp_<verb>`.
 
+A required AHP action counts only after explicit success (CLI exit 0; MCP result
+not marked as an error). If `pickup` or `start` fails, leave code, docs and
+Git unchanged. Preserve the exact error, do only read-only diagnosis, follow its
+permission/mount/sandbox guidance, then retry. Never silently switch to an
+in-repo worklog or proceed from memory.
+
 At the start of a session, before editing anything:
   1. Run `ahp pickup`. It shows the last handoff, the commits since its base,
      which are accounted for, and any OPEN INTENTS (declared work not yet

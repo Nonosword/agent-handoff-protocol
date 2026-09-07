@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as git from "./git.mjs";
 import { registryPath, projectDir, worklogPath, lockPath } from "./paths.mjs";
+import { explainStoreFsError } from "./storage-errors.mjs";
 
 function slug(s) {
   return s.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase().slice(0, 80) || "project";
@@ -23,19 +24,45 @@ function shortHash(s) {
 }
 
 export function loadRegistry(home) {
+  const file = registryPath(home);
+  let raw;
   try {
-    const data = JSON.parse(fs.readFileSync(registryPath(home), "utf8"));
-    if (data && typeof data === "object" && data.projects) return data;
-  } catch { /* fall through */ }
-  return { version: 1, projects: {} };
+    raw = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return { version: 1, projects: {} };
+    throw explainStoreFsError(error, {
+      operation: "read the project registry",
+      target: file,
+      effect: "The registry was not treated as empty and nothing was overwritten."
+    });
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`[AHP_REGISTRY_INVALID] Cannot parse ${file}: ${error.message}. AHP refuses to treat a corrupt registry as empty or overwrite it.`);
+  }
+  if (!data || typeof data !== "object" || !data.projects || typeof data.projects !== "object" || Array.isArray(data.projects)) {
+    throw new Error(`[AHP_REGISTRY_INVALID] ${file} must contain a top-level projects object. AHP refuses to treat an invalid registry as empty or overwrite it.`);
+  }
+  return data;
 }
 
 export function saveRegistry(home, registry) {
   const file = registryPath(home);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`);
-  fs.renameSync(tmp, file);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`);
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    throw explainStoreFsError(error, {
+      operation: "update the project registry",
+      target: file,
+      effect: "The registry update did not complete; no worklog record was written."
+    });
+  }
 }
 
 // Compute the id + descriptor for whatever project contains `cwd`.
@@ -49,7 +76,7 @@ export function identify(cwd) {
 }
 
 // Resolve the active project. Precedence: explicit > env > cwd git > error.
-export function resolve({ cwd = process.cwd(), project = null, env = process.env, home }) {
+export function resolve({ cwd = process.cwd(), project = null, env = process.env, home, registerMissing = true }) {
   const registry = loadRegistry(home);
   const want = project ?? (env.AHP_PROJECT && env.AHP_PROJECT.trim() !== "" ? env.AHP_PROJECT : null);
 
@@ -75,7 +102,17 @@ export function resolve({ cwd = process.cwd(), project = null, env = process.env
     }
     if ((entry.roots ?? []).includes(ident.root)) return descriptor(id, entry, home, { source: "git-path" });
   }
-  // unregistered but in a repo: auto-register
+  // Read-only commands can derive the stable descriptor without touching the
+  // registry. The first write command will persist the same identity.
+  if (!registerMissing) {
+    return descriptor(ident.id, {
+      name: ident.name,
+      remote: ident.remote,
+      roots: [ident.root],
+      created: null
+    }, home, { source: "git-unregistered" });
+  }
+  // unregistered but in a repo: auto-register before writing
   return register({ cwd, home, name: ident.name, autoreg: true });
 }
 
@@ -97,7 +134,7 @@ function descriptor(id, entry, home, meta) {
     worklog: worklogPath(id, home),
     lock: lockPath(id, home),
     source: meta.source,
-    registered: meta.source !== "explicit-unregistered"
+    registered: !["explicit-unregistered", "git-unregistered"].includes(meta.source)
   };
 }
 

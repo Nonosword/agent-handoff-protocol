@@ -83,8 +83,12 @@ ahp intent promote --id i-0828-a --commit 9f2e1df --gate pass \
 ahp end     --reason limit --summary "3 个提交里落地了 1 个" --gate pass --evidence "194 pass"
 ```
 
-仓库里第一条 `ahp` 命令会自动注册它。`ahp` 从 Git 自动填 `seq`、时间戳、base 提交、
-工作区状态——你只提供含义。
+`status`、`pickup` 等读命令不会为了识别项目而写入；第一条写命令才会自动注册。
+`ahp` 从 Git 自动填 `seq`、时间戳、base 提交、工作区状态——你只提供含义。
+
+必需的 AHP 操作一旦报错，就视为没有完成。先保持项目不变，按错误中的目标路径、现场证据和
+下一步排查文件权限、只读挂载或沙箱授权，再重试到 CLI 退出码为 0（或 MCP 结果不是 error）。
+不得静默改用仓库内 worklog。
 
 在**任意目录**——一览所有项目：
 
