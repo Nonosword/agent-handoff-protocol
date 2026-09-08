@@ -20,6 +20,7 @@ function ago(iso) {
 export function renderStatus({ project, git: g, analysis }) {
   const L = [];
   L.push(`project   ${project.name}  [${project.id}]`);
+  if (project.lane) L.push(`lane      ${project.lane.id}  (${project.lane.title})`);
   if (project.remote) L.push(`remote    ${project.remote}`);
   L.push(`root      ${g.root ?? "?"}${g.branch ? `  (${g.branch})` : ""}`);
   L.push(`head      ${g.short ?? "?"}   tree ${g.clean === null ? "?" : g.clean ? "clean" : "DIRTY"}`);
@@ -56,65 +57,99 @@ export function renderStatus({ project, git: g, analysis }) {
   return L.join("\n");
 }
 
-export function renderPickup({ project, git: g, analysis, sinceCommits, reconcile, selfHistory }) {
-  const L = [];
-  L.push(`# AHP pickup — ${project.name} [${project.id}]`);
-  L.push("");
+export function renderPickup({ project, git: g, analysis, sinceCommits, reconcile, selfHistory, full = false }) {
+  const lines = [];
+  const laneLabel = project.lane ? " · Lane " + project.lane.id + " (" + project.lane.title + ")" : "";
+  lines.push("# AHP pickup — " + project.name + " [" + project.id + "]" + laneLabel);
+  lines.push("");
   if (analysis.count === 0) {
-    L.push("Worklog is empty. This is a fresh start.");
-    L.push("Next: `ahp start --plan \"…\" --gate pass|fail|not-run`");
-    return L.join("\n");
+    lines.push("Worklog is empty. This is a fresh start.");
+    lines.push("Next: `ahp start --plan \"…\" --gate pass|fail|not-run`");
+    return lines.join("\n");
   }
   if (selfHistory) {
-    L.push(`You (${selfHistory.meId}) last held the baton at seq ${selfHistory.seq}, ${ago(selfHistory.at)}.`);
-    L.push(`${selfHistory.handoffsSince} handoff${selfHistory.handoffsSince === 1 ? "" : "s"} since. Your earlier plan may be stale — reconcile the changes below and continue forward, don't resume from memory.`);
-    L.push("");
+    lines.push("You (" + selfHistory.meId + ") last held the baton for this Lane at seq " + selfHistory.seq + ", " + ago(selfHistory.at) + ".");
+    lines.push(selfHistory.handoffsSince + " handoff" + (selfHistory.handoffsSince === 1 ? "" : "s") + " since; continue from the Lane state below, not from memory.");
+    lines.push("");
   }
-  const s = analysis.lastStart;
-  if (!s) {
-    L.push(`No handoff.start yet — ${analysis.count} record(s) written without one.`);
-    L.push("Inspect them (`ahp log`), then: `ahp start --plan \"…\" --gate pass|fail|not-run`");
-    return L.join("\n");
+  const start = analysis.lastStart;
+  if (!start) {
+    lines.push("No handoff.start yet — " + analysis.count + " record(s) written without one.");
+    lines.push("Inspect them with `ahp log`, then start the Lane.");
+    return lines.join("\n");
   }
-  L.push(`Last handoff.start — ${workerLabel(s.worker)}, ${ago(s.at)}  ·  session ${analysis.baton.sessionId}`);
-  L.push(`  base commit : ${s.base?.commit ?? "?"}  (gate ${s.base?.gate ?? "?"})`);
-  L.push(`  plan        : ${s.plan}`);
+
+  lines.push("Last handoff: " + workerLabel(start.worker) + " · " + ago(start.at) + " · base " + String(start.base?.commit ?? "?").slice(0, 12) + " · gate " + (start.base?.gate ?? "?"));
+  lines.push("  plan: " + String(start.plan ?? "").slice(0, full ? 1000 : 240));
   if (analysis.batonHeld) {
-    L.push(`  ⚠ that session wrote no handoff.end — treat as a cutoff; reconstruct from the commits and open intents below`);
+    lines.push("  ⚠ no handoff.end — treat this as a cutoff");
   } else {
-    const end = [...analysis.records].reverse().find((r) => r.type === "handoff.end");
-    if (end) L.push(`  session ended cleanly (${end.reason}) at ${(end.end?.commit ?? "?").slice(0, 12)}, gate ${end.end?.gate ?? "?"}`);
+    const end = [...analysis.records].reverse().find((record) => record.type === "handoff.end");
+    if (end) lines.push("  session ended cleanly (" + end.reason + ") at " + String(end.end?.commit ?? "?").slice(0, 12) + " · gate " + (end.end?.gate ?? "?"));
   }
-  L.push("");
+  lines.push("");
 
-  L.push(`Commits since ${(s.base?.commit ?? "?").slice(0, 12)} → HEAD (${g.short}): ${sinceCommits.length}`);
-  for (const c of sinceCommits) {
-    const known = reconcile.commitToIntent.get(c.short) ?? reconcile.commitToIntentLong.get(c.short);
-    L.push(`  ${c.short}  ${c.subject}${known ? `   ✓ ${known}` : "   ⚠ no intent.promote names this"}`);
+  const linksFor = (commit) => [...new Set([
+    ...(reconcile.commitToIntent.get(commit.short) ?? []),
+    ...(reconcile.commitToIntentLong.get(commit.short.slice(0, 7)) ?? [])
+  ])];
+  const unmatched = sinceCommits.filter((commit) => linksFor(commit).length === 0);
+  const matched = sinceCommits.filter((commit) => linksFor(commit).length > 0);
+  lines.push("Commits since base → HEAD: " + sinceCommits.length + " commit(s) · " + matched.length + " promoted · " + unmatched.length + " unmatched");
+
+  let visibleCommits;
+  if (full) {
+    visibleCommits = sinceCommits;
+  } else {
+    const attention = unmatched.slice(0, 8);
+    const room = Math.max(0, 10 - attention.length);
+    const recent = matched.slice(-room);
+    const seen = new Set(attention.map((commit) => commit.short));
+    visibleCommits = [...attention, ...recent.filter((commit) => !seen.has(commit.short))];
   }
-  L.push("");
+  for (const commit of visibleCommits) {
+    const links = linksFor(commit);
+    lines.push("  " + commit.short + "  " + commit.subject + (links.length ? "   ✓ " + links.join(", ") : "   ⚠ unmatched"));
+  }
+  const omittedCommits = sinceCommits.length - visibleCommits.length;
+  if (omittedCommits > 0) lines.push("  … " + omittedCommits + " commit(s) omitted from the compact view; run `ahp pickup --full` if needed.");
+  if (!full && unmatched.length > 8) {
+    lines.push("  ⚠ " + (unmatched.length - 8) + " unmatched commit(s) omitted; run `ahp pickup --full` before starting.");
+  }
+  lines.push("");
 
-  if (reconcile.danglingPromotes.length) {
-    L.push(`Promotions naming a commit not reachable from HEAD:`);
-    for (const p of reconcile.danglingPromotes) L.push(`  ⚠ ${p.intentId} → ${p.commits.join(", ")}`);
-    L.push("");
+  if (reconcile.unreadLanes.length) {
+    lines.push("  ⚠ cross-Lane commit associations unavailable from: " + reconcile.unreadLanes.join(", "));
+    lines.push("");
   }
 
-  if (analysis.openIntents.length) {
-    L.push(`Open intents (${analysis.openIntents.length}) — check the working tree for each:`);
-    for (const it of analysis.openIntents) {
-      L.push(`  · ${it.intentId}  ${it.title}`);
-      L.push(`      intended: ${it.intended}`);
+  if (full && reconcile.danglingPromotes.length) {
+
+    lines.push("Historical promotions not reachable from HEAD:");
+    for (const promotion of reconcile.danglingPromotes) {
+      lines.push("  ⚠ " + promotion.intentId + " → " + promotion.commits.join(", "));
     }
-    L.push("");
+    lines.push("");
   }
 
-  L.push(`Working tree: ${g.clean === null ? "?" : g.clean ? "clean" : `DIRTY (${g.dirty.length} path(s))`}`);
-  for (const p of g.dirty.slice(0, 20)) L.push(`  ${p}`);
-  L.push("");
-  L.push("Then, once you have reconciled and run the gate yourself:");
-  L.push("  ahp start --plan \"…\" --gate pass --evidence \"…\"");
-  return L.join("\n");
+  const visibleIntents = full ? analysis.openIntents : analysis.openIntents.slice(0, 5);
+  lines.push("Open intents: " + analysis.openIntents.length);
+  for (const intent of visibleIntents) {
+    lines.push("  ○ " + intent.intentId + " — " + intent.title);
+    lines.push("    " + String(intent.intended ?? "").slice(0, full ? 1000 : 200));
+  }
+  if (analysis.openIntents.length > visibleIntents.length) {
+    lines.push("  … " + (analysis.openIntents.length - visibleIntents.length) + " omitted; run `ahp pickup --full`.");
+  }
+  lines.push("");
+
+  lines.push("Working tree: " + (g.clean === null ? "?" : g.clean ? "clean" : "DIRTY (" + g.dirty.length + " path(s))"));
+  const visibleDirty = full ? g.dirty : g.dirty.slice(0, 10);
+  for (const dirty of visibleDirty) lines.push("  " + dirty);
+  if (g.dirty.length > visibleDirty.length) lines.push("  … " + (g.dirty.length - visibleDirty.length) + " path(s) omitted.");
+  lines.push("");
+  lines.push("Next: reconcile the items above, run the project gate, then `ahp start --plan \"…\" --gate …`.");
+  return lines.join("\n");
 }
 
 export function renderLog(records) {

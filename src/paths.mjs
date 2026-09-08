@@ -3,10 +3,11 @@
 // Precedence: $AHP_HOME  >  $XDG_DATA_HOME/agent-handoff  >  ~/.local/share/agent-handoff
 //
 // Layout under the store:
-//   projects.json                 registry: id -> { name, remote, roots[], created }
-//   projects/<id>/worklog.jsonl    the live worklog for one project
-//   projects/<id>/archive/*.jsonl  compacted spans
-//   projects/<id>/.lock            per-project write lock
+//   projects.json                              Project registry
+//   projects/<id>/lanes.json                   editable Lane registry
+//   projects/<id>/lanes/<lane>/worklog.jsonl   append-only Lane stream
+//   projects/<id>/lanes/<lane>/archive/*       compacted Lane spans
+//   projects/<id>/worklog.jsonl                legacy stream (Lane `main`)
 
 import os from "node:os";
 import path from "node:path";

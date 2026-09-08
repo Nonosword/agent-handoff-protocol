@@ -10,13 +10,14 @@ description: >-
 
 # Agent Handoff Protocol
 
-An append-only worklog in a central store outside your project repo, one file per
-project, keyed by the project's Git identity. Your repository is never modified.
+Independent append-only Lane worklogs in a central store outside your project
+repo, grouped by the project's Git identity. Your repository is never modified.
 
 ## Which interface
 
 If the `ahp_*` MCP tools are available this session (`ahp_pickup`, `ahp_start`,
-`ahp_intent_open`, `ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`),
+`ahp_intent_open`, `ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`,
+`ahp_lane_list`, `ahp_lane_create`, `ahp_lane_edit`),
 **use those** — the free-text fields (`actual`, `landmines`, `summary`, `plan`)
 are passed as structured strings instead of through shell quoting.
 
@@ -33,15 +34,25 @@ unchanged. Preserve the exact error, perform only read-only diagnosis, follow
 its permission/mount/sandbox guidance, then retry. Do not silently switch to an
 in-repo worklog or proceed from memory.
 
+Resolve the Lane before the first change. Run `ahp lane list` when more than one
+exists. If the task clearly matches an id/title/description/scope/alias, select
+it with `--lane <id>` (or the MCP `lane` field) without asking. If none matches,
+create one with a concise title, description and scope. If several remain
+plausible, show the listed Lanes plus New Lane and ask the user. With no Lane,
+`start` creates one from its plan; a sole Lane or the sole Lane held by you is
+automatically selected. Carry the same explicit Lane through `pickup`, `start`
+and later writes. Do not create a near-duplicate Lane.
+
 ## At the start of a session — PICKUP (do this before any change)
 
 ```
 ahp pickup
 ```
 
-Read its output. It shows the last handoff, every commit since that handoff's
-base, which commits are accounted for by an `intent.promote`, and any **open
-intents** (declared work with no promotion — i.e. probably uncommitted).
+Read its output. The default is intentionally compact: it prioritises unmatched
+commits and bounds commits, open intents and dirty paths. Run `ahp pickup --full`
+only when omitted detail is needed. It also shows **open intents** (declared work
+with no promotion — i.e. probably uncommitted).
 
 Then, per open intent, look at the working tree (`git status`, `git diff`) and
 decide: finish it, commit it as `wip:` and promote it, or stash it. Run the
@@ -100,10 +111,10 @@ it is required if `--gate` is not `pass`.
 
 ## Other
 
-- `ahp dashboard` — every project at once: baton holder + plan, worklog state,
-  open intents, `verify`, and drift (commits since the baton base with no
-  promotion). The one command that runs **outside** a repo, so it answers "what
-  is in flight anywhere". `-w` for a live view, `--json` for scripting. CLI only
+- `ahp dashboard` — every Project/Lane at once: baton holder + plan, worklog
+  state, open intents, `verify`, branch and short HEAD. Watch mode fingerprints
+  lightweight state and redraws only after a change. The one command that runs
+  **outside** a repo; `-w` for watch, `--json` for scripting. CLI only
   — there is no `ahp_dashboard` MCP tool, so shell out for it.
 - `ahp status` — quick state check
 - `ahp log` — readable history

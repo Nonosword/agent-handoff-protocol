@@ -19,8 +19,8 @@ when it will be cut off, so it cannot rely on performing a clean shutdown.
 
 AHP makes every rotation — and every solo session — recoverable from durable
 evidence alone. **What changed** is read from version control. **What is not done,
-where the hazards are, and what to do next** is read from one append-only log: the
-*worklog*.
+where the hazards are, and what to do next** is read from the selected Lane's
+append-only *worklog*.
 
 The protocol applies whether or not a rotation is expected. A single agent working
 alone follows the same procedure, because "alone" can become "relay" at any commit.
@@ -36,13 +36,18 @@ in RFC 2119.
   MAY be carried separately in `worker.runtime`.
   *Avoid:* `claude-code` / `Claude Code` as the id (that is a runtime, not the
   worker id — it folds to `claude`); `agent`; `bot`.
+- **Project** — one VCS repository identity. It locates the code but does not
+  define a single unit of work.
+- **Lane** — one coherent work stream inside a Project, with its own worklog and
+  baton. Lane metadata (id, title, description, scope, aliases, status) is an
+  editable routing aid, not part of the append-only record stream.
 - **Session** — the span from a worker's *pickup* to its *drop* (or cutoff),
   named by a `sessionId` (§5.2) minted on `handoff.start`.
   *Avoid:* "run", "turn", "conversation" — a session spans many turns and may
   outlive one conversation.
-- **Baton** — the right to be the single active worker on a repository. Exactly
-  one session holds it at a time. A consumer reads its state from the **baton
-  projection** (§6.1), not by re-folding the record stream.
+- **Baton** — the right to be the single active worker on a Lane. Exactly one
+  session holds that Lane's baton at a time. A consumer reads its state from the
+  **baton projection** (§6.1), not by re-folding the record stream.
   *Avoid:* "lock" (it is advisory, not enforced), "lease".
 - **Severed** — a session whose baton ended without a `handoff.end` (a hard
   cutoff), as opposed to *released* by a clean `handoff.end`. Severing is
@@ -91,10 +96,11 @@ Rotated agents lose continuity in three ways this protocol addresses:
 A worklog MUST NOT restate what `git log` already carries. Its job is the column
 VCS cannot express.
 
-### 4.2 The worklog
+### 4.2 Projects, Lanes and worklogs
 
-A single [JSON Lines](https://jsonlines.org/) stream per project. Its properties,
-regardless of where it is stored:
+A Project contains zero or more Lanes. Each Lane has one [JSON Lines](https://jsonlines.org/)
+worklog stream and one independent baton. The Lane registry is mutable metadata;
+the worklog itself has these properties regardless of where it is stored:
 
 - **Format.** One JSON object per line, UTF-8, LF-terminated. No comments, no
   trailing commas.
@@ -102,8 +108,9 @@ regardless of where it is stored:
   committed to the project repository.
 - **Append-only.** Existing lines MUST NOT be edited, reordered or deleted.
   Corrections are new records.
-- **Single active writer.** At most one worker holds the baton, so appends are
-  race-free. A worker that detects a second active writer (see §8) MUST stop.
+- **Single active writer per Lane.** At most one worker holds a given Lane's
+  baton, so its appends are race-free. A worker that detects a second active
+  writer on that Lane (see §8) MUST stop.
 - **Ordered by `seq`.** A strictly increasing integer, starting at 1. Ordering
   MUST derive from `seq`, never from `at`, because clocks differ across machines
   and runtimes.
@@ -112,16 +119,18 @@ regardless of where it is stored:
 
 The records and procedures are identical under either binding:
 
-- **In-repo.** `.coworker/worklog.jsonl` at the repository root, with
-  `.coworker/` in the project's ignore file. Simple; co-located with the code.
-- **External store.** A per-user store outside every project, one file per
-  project, keyed by the project's identity (§4.4). The project repository is not
+- **In-repo.** `.coworker/lanes/<lane>/worklog.jsonl` at the repository root,
+  with `.coworker/` in the project's ignore file. A legacy
+  `.coworker/worklog.jsonl` is the synthetic `main` Lane.
+- **External store.** A per-user store outside every project, grouped by project
+  identity (§4.4), with one worklog per Lane. The project repository is not
   touched at all. This is what the reference `ahp` implementation uses by
   default, at `$XDG_DATA_HOME/agent-handoff/` (falling back to
-  `~/.local/share/agent-handoff/`).
+  `~/.local/share/agent-handoff/`). A pre-Lane project worklog is exposed as the
+  synthetic `main` Lane.
 
 A worker does not need to know which binding is in effect; it asks the
-implementation for "this project's worklog".
+implementation for the selected Lane's worklog.
 
 ### 4.4 Project identity
 
@@ -135,6 +144,33 @@ directories and, where possible, across re-clones. Derive it from VCS:
 
 The implementation SHOULD keep a registry recording each project's name, remote
 and every local path it has been seen at, so a moved checkout still resolves.
+
+### 4.5 Lane resolution
+
+Project resolution happens first. The consumer then resolves one Lane:
+
+1. An explicit Lane id, title or alias selects that Lane.
+2. With no selectable Lane, the first `handoff.start` MAY create one from its
+   plan; other writes MUST require a Lane first.
+3. A sole selectable Lane is selected automatically. If several exist but
+   exactly one is held by the current worker, that Lane is selected.
+4. Otherwise the worker SHOULD compare the task with each Lane's title,
+   description, scope and aliases. A clear match is selected explicitly; if no
+   Lane matches, the worker creates a concise new Lane.
+5. If several matches remain plausible, the consumer MUST show the existing
+   Lane descriptions plus a new-Lane option. The worker asks the operator only
+   when it cannot resolve that ambiguity reliably.
+
+Workers MAY propose Lane metadata and operators MAY edit it. Implementations
+MUST prevent ids, titles and aliases from overlapping in ways that make an
+explicit selection ambiguous. Archived Lanes MUST NOT accept new records unless
+an operator changes their status.
+
+A commit association is scoped to an intent, not owned by a Lane. The same VCS
+commit MAY therefore appear in promotions in several Lanes and MUST NOT be
+rejected or semantically deduplicated for that reason. AHP does not select a Git
+branch strategy: the worker decides whether isolation requires a branch or
+worktree, or whether following the current branch is appropriate.
 
 ## 5. Records
 
@@ -277,14 +313,18 @@ the same action. It MUST NOT silently switch storage bindings, pretend the
 record exists, or continue from memory. If an append reports that its outcome is
 uncertain, inspect the worklog before retrying so the record is not duplicated.
 
-A worker MUST, before making any change:
+A worker MUST resolve the Project and Lane per §4.5 before making any change.
+All following reads and writes apply to that selected Lane. Then:
 
 1. Read the worklog. Find the last `handoff.start` and its `base.commit`; note the
    highest `seq`.  *(`ahp pickup` does steps 1–4.)*
 2. List the VCS history from `base.commit` to HEAD.
-3. Reconcile: every commit since `base.commit` SHOULD correspond to an
-   `intent.promote`; every `intent.promote` SHOULD name a commit reachable from
-   HEAD. Investigate any mismatch before new work.
+3. Reconcile: every commit since `base.commit` that belongs to this Lane's
+   work SHOULD correspond to an `intent.promote`; every `intent.promote` SHOULD
+   name a commit reachable from HEAD. Before reporting a commit as unmatched, a
+   consumer SHOULD consult promotion associations in the Project's other Lanes.
+   A commit associated with another Lane is not a duplicate or conflict by
+   itself. Investigate any remaining mismatch before new work.
 4. For every `intent.open` with no `intent.promote`: inspect the working tree for
    matching uncommitted work. Decide, per intent — finish it, commit it as
    work-in-progress with a promotion, or set it aside and record the disposition.
@@ -304,6 +344,11 @@ A worker MUST, before making any change:
 9. Do not cross a commit boundary leaving a dirty tree that no open intent
    describes.
 
+The one-intent-per-commit guideline does not imply one-Lane-per-commit: a shared
+commit MAY realize intents in several Lanes. Before committing, the worker
+SHOULD decide whether concurrent or unrelated code changes require an isolated
+branch/worktree. Lane separation does not isolate the physical working tree.
+
 ### 7.3 Drop — best-effort
 
 10. Move to the nearest gate-passing commit. Promote every completed intent.
@@ -314,7 +359,7 @@ A worker MUST, before making any change:
 
 | Situation | Required handling |
 | --- | --- |
-| Worklog file absent | Treat as a fresh start. First worker creates it with `continuesFrom: null`. |
+| Selected Lane worklog absent | Treat that Lane as a fresh start. Its first worker creates it with `continuesFrom: null`. |
 | Store access denied | The implementation identifies the denied operation and target, reports available process/owner/mode/access evidence, distinguishes likely file/directory permissions, read-only mount, or sandbox policy without claiming certainty, and gives a retry path. The worker follows §7.1's fail-closed rule. |
 | Worklog not valid JSONL | Stop. Do not append. Surface the corrupt line to the operator. |
 | `seq` not strictly increasing | Stop. The log was edited or written concurrently. Operator disposition required. |
@@ -328,7 +373,7 @@ A worker MUST, before making any change:
 The worklog grows without bound. To compact (`ahp compact --keep N`):
 
 - Move a contiguous span of the oldest lines to
-  `.coworker/worklog.archive/<firstSeq>-<lastSeq>.jsonl` (also not VCS-tracked).
+  beside the selected Lane worklog as `archive/<firstSeq>-<lastSeq>.jsonl` (also not VCS-tracked).
 - The live file MUST retain enough context for §7.1: at minimum the last
   completed session, plus every `intent.open` that is still un-promoted. `seq`
   continues from where the live file now starts.

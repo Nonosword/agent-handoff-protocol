@@ -19,7 +19,7 @@ holds without cross-machine file locking.
 ```
   device A ─ codex ─┐
   device B ─ claude ┼── HTTP ──▶  ahp-mcp --serve   ──▶  $AHP_HOME (hub)
-  device C ─ cursor ┘             (hub machine)          one file per project
+  device C ─ cursor ┘             (hub machine)          one worklog per Lane
 ```
 
 The project ships a **service entry point and a config file**. Where the

@@ -20,19 +20,20 @@ const PROTOCOL_VERSION = "2025-06-18";
 
 const COMMON = {
   cwd: { type: "string", description: "directory to resolve the project from (default: the server's working directory)" },
-  project: { type: "string", description: "explicit project id or name (overrides cwd detection)" }
+  project: { type: "string", description: "explicit project id or name (overrides cwd detection)" },
+  lane: { type: "string", description: "existing Lane id, title, or alias; omit only when the Project has no selection ambiguity" }
 };
 
 const TOOLS = [
   {
     name: "ahp_status",
-    description: "Project, baton holder, open intents, and working-tree / gate state for the current project.",
+    description: "Selected Lane, baton holder, open intents, and current working-tree / gate state.",
     inputSchema: { type: "object", properties: { ...COMMON } }
   },
   {
     name: "ahp_pickup",
-    description: "Guided AHP pickup: the last handoff, the commits since its base, reconciliation against intent.promote records, and open intents. READ-ONLY. Run this before taking the baton.",
-    inputSchema: { type: "object", properties: { ...COMMON } }
+    description: "Compact guided pickup for the selected Lane: last handoff, prioritised commit reconciliation and open intents. READ-ONLY. Run before taking the baton; set full only when omitted detail is needed.",
+    inputSchema: { type: "object", properties: { full: { type: "boolean", description: "include every commit, intent and historical reachability check" }, ...COMMON } }
   },
   {
     name: "ahp_start",
@@ -100,8 +101,29 @@ const TOOLS = [
     }
   },
   {
+    name: "ahp_lane_list",
+    description: "List this project's Lanes with concise descriptions and baton state.",
+    inputSchema: { type: "object", properties: { as_json: { type: "boolean" }, cwd: COMMON.cwd, project: COMMON.project } }
+  },
+  {
+    name: "ahp_lane_create",
+    description: "Create a Lane when no existing Lane matches the task. The agent supplies its concise specification; a human may edit it later.",
+    inputSchema: {
+      type: "object", required: ["title", "description"],
+      properties: { id: { type: "string" }, title: { type: "string" }, description: { type: "string" }, scope: { type: "array", items: { type: "string" } }, aliases: { type: "array", items: { type: "string" } }, cwd: COMMON.cwd, project: COMMON.project }
+    }
+  },
+  {
+    name: "ahp_lane_edit",
+    description: "Edit a Lane title, description, scope, aliases, or lifecycle status.",
+    inputSchema: {
+      type: "object", required: ["lane"],
+      properties: { lane: { type: "string" }, title: { type: "string" }, description: { type: "string" }, status: { type: "string", enum: ["active", "blocked", "done", "archived"] }, scope: { type: "array", items: { type: "string" } }, aliases: { type: "array", items: { type: "string" } }, cwd: COMMON.cwd, project: COMMON.project }
+    }
+  },
+  {
     name: "ahp_read",
-    description: "Read worklog records for the current project (human-readable, or raw with as_json). `field` projects one field flat across matching records instead of whole records — e.g. field:\"landmines\" or field:\"next\"; field:\"hazards\" pulls landmines + findings together (what the next worker must know). With field set, `tail` counts values, not records.",
+    description: "Read worklog records for the selected Lane (human-readable, or raw with as_json). `field` projects one field flat across matching records instead of whole records — e.g. field:\"landmines\" or field:\"next\"; field:\"hazards\" pulls landmines + findings together (what the next worker must know). With field set, `tail` counts values, not records.",
     inputSchema: {
       type: "object",
       properties: {
@@ -113,7 +135,7 @@ const TOOLS = [
   },
   {
     name: "ahp_verify",
-    description: "Structural + lifecycle check of the current project's worklog. Strict by default (a quality warning fails); pass lenient:true for an old or knowingly-messy log.",
+    description: "Structural + lifecycle check of the selected Lane's worklog. Strict by default (a quality warning fails); pass lenient:true for an old or knowingly-messy log.",
     inputSchema: { type: "object", properties: { lenient: { type: "boolean" }, ...COMMON } }
   }
 ];
@@ -122,12 +144,30 @@ function toArgv(name, a = {}) {
   const g = [];
   if (a.project) g.push("--project", String(a.project));
   if (a.cwd) g.push("--cwd", String(a.cwd));
+  if (a.lane) g.push("--lane", String(a.lane));
   // push into the command's own argv (r), NOT g — g has already been spread
   // into r by the time these run, so appending to g here would be dropped.
   const list = (r, flag, arr) => (arr ?? []).forEach((v) => r.push(flag, String(v)));
   switch (name) {
     case "ahp_status": return ["status", ...g];
-    case "ahp_pickup": return ["pickup", ...g];
+    case "ahp_pickup": return ["pickup", ...(a.full ? ["--full"] : []), ...g];
+    case "ahp_lane_list": return ["lane", "list", ...(a.as_json ? ["--json"] : []), ...g];
+    case "ahp_lane_create": {
+      const r = ["lane", "create", "--title", String(a.title), "--description", String(a.description), ...g];
+      if (a.id) r.push("--id", String(a.id));
+      list(r, "--scope", a.scope); list(r, "--alias", a.aliases);
+      return r;
+    }
+    case "ahp_lane_edit": {
+      const r = ["lane", "edit", String(a.lane)];
+      if (a.project) r.push("--project", String(a.project));
+      if (a.cwd) r.push("--cwd", String(a.cwd));
+      if (a.title) r.push("--title", String(a.title));
+      if (a.description) r.push("--description", String(a.description));
+      if (a.status) r.push("--status", String(a.status));
+      list(r, "--scope", a.scope); list(r, "--alias", a.aliases);
+      return r;
+    }
     case "ahp_verify": return ["verify", ...(a.lenient ? ["--lenient"] : []), ...g];
     case "ahp_read": {
       const r = ["read", ...g];

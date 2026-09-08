@@ -54,11 +54,11 @@ prior turn of yours. The worklog is session continuity, not a per-agent journal:
 a constraint that outlives a session belongs in the project's own docs, and
 `ahp log --worker <id>` still shows any one agent's full trail.
 
-The worklog is one JSON-Lines file per project, **append-only**, ordered by an
-integer `seq`, living in a per-user store at
-`$XDG_DATA_HOME/agent-handoff/` — keyed by the project's Git identity, so it
-works from any subdirectory and after a re-clone. Nothing is added to your repo.
-(An in-repo `.coworker/worklog.jsonl` is also a valid layout — see [SPEC §4.3](./SPEC.md).)
+A **Project** identifies the Git repository; a **Lane** identifies one coherent
+work stream inside it. Each Lane has its own append-only JSON-Lines worklog and
+baton, ordered by integer `seq`, in the per-user store at
+`$XDG_DATA_HOME/agent-handoff/`. Existing project-wide logs remain available as
+the synthetic `main` Lane. Nothing is added to your repo. See [SPEC §4](./SPEC.md).
 
 ## Install
 
@@ -93,7 +93,7 @@ From inside any Git repo:
 
 ```sh
 ahp status          # project, baton holder, open intents, tree/gate state
-ahp pickup          # guided pickup: last handoff, commits since, open intents
+ahp pickup          # compact pickup; add --full only when the detail is needed
 ahp start   --plan "add rate limiting" --gate pass --evidence "188 tests pass"
 ahp intent open   --id i-0828-a --title "token bucket" --intended "per-IP, 429 on exhaustion"
 ahp intent promote --id i-0828-a --commit 9f2e1df --gate pass \
@@ -105,6 +105,26 @@ Read commands such as `status` and `pickup` never write merely to discover a
 project. The first write command auto-registers it. `ahp` fills in `seq`, the
 timestamp, the base commit and tree state from Git — you supply the meaning.
 
+### Project and Lane selection
+
+Project detection stays automatic. Within that Project:
+
+1. With no Lane, the first `ahp start` creates one from its plan.
+2. With one selectable Lane — or exactly one Lane already held by this worker —
+   AHP selects it automatically.
+3. When the task clearly matches a Lane's id, title, description, scope or alias,
+   the agent passes `--lane <id>` (or the MCP `lane` field).
+4. If several Lanes remain plausible, AHP lists them plus **Create a new Lane**;
+   the agent asks the operator only when it cannot decide reliably.
+
+Carry the same explicit Lane through `pickup`, `start` and later writes; after it is the only Lane held by you, auto-selection can safely take over.
+Use `ahp lane list`, `ahp lane create`, and `ahp lane edit` to inspect or refine
+the metadata. Agents propose concise Lane descriptions; humans may edit them.
+A commit may legitimately be promoted by intents in multiple Lanes: AHP records
+associations, not commit ownership, and performs no semantic commit deduplication.
+The agent still decides whether the work needs its own branch/worktree or can
+follow the current branch; AHP does not choose or enforce a Git strategy.
+
 If a required AHP action fails, it did not happen. Keep the project unchanged,
 follow the error's target/evidence/next-step diagnostics, obtain filesystem or
 sandbox access as needed, and retry until the CLI exits 0 (or the MCP result is
@@ -113,14 +133,14 @@ not an error). Never silently substitute an in-repo worklog.
 From **anywhere** — every project at a glance:
 
 ```sh
-ahp dashboard       # baton holder + plan, worklog state, open intents, verify,
-                    # git HEAD/tree, and a drift check (commits with no promote)
-ahp dashboard -w    # live view — refreshes on the alternate screen, ctrl-c to exit
+ahp dashboard       # every Project/Lane: baton, plan, open intents, verify,
+                    # plus branch and short HEAD (no working-tree/log scan)
+ahp dashboard -w    # redraws only after state changes; ctrl-c to exit
 ahp dashboard --json
 ```
 
 
-Dashboard uses neutral ANSI-256 grey `38;5;250` for all auxiliary text, so Tabby does not depend on its unusually dark ANSI bright-black mapping. Separator rules remain a separate ANSI `90` token, preserving their lower visual weight.
+Dashboard uses neutral ANSI-256 grey `38;5;248` for auxiliary text, so Tabby does not depend on its unusually dark ANSI bright-black mapping. Separator rules remain a separate ANSI `90` token, preserving their lower visual weight.
 
 ## Records
 

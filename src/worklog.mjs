@@ -1,4 +1,4 @@
-// Worklog read / append / analyze, with a per-project write lock and fsync.
+// Worklog read / append / analyze, with a per-Lane write lock and fsync.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -13,7 +13,7 @@ export function readText(worklogFile) {
   catch (error) {
     if (error.code === "ENOENT") return "";
     throw explainStoreFsError(error, {
-      operation: "read the project worklog",
+      operation: "read the selected Lane worklog",
       target: worklogFile,
       effect: "No state was changed; the worklog could not be read."
     });
@@ -46,7 +46,7 @@ export function analyze(entries) {
 
 // --- write path -------------------------------------------------------------
 
-function acquireLock(lockFile) {
+export function acquireLock(lockFile) {
   fs.mkdirSync(path.dirname(lockFile), { recursive: true });
   for (let attempt = 0; attempt < 100; attempt += 1) {
     let fd;
@@ -75,10 +75,13 @@ function acquireLock(lockFile) {
       if (fd !== undefined) fs.closeSync(fd);
     }
   }
-  throw new Error(`could not acquire worklog lock: ${lockFile}`);
+  const error = new Error(`could not acquire file lock: ${lockFile}`);
+  error.code = "EBUSY";
+  error.path = lockFile;
+  throw error;
 }
 
-function releaseLock(lockFile) {
+export function releaseLock(lockFile) {
   try { fs.rmSync(lockFile, { force: true }); } catch { /* ignore */ }
 }
 

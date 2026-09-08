@@ -52,6 +52,24 @@ export function dirtyPaths(cwd) {
   return r.out.split("\n").map((l) => l.trim());
 }
 
+// One cheap command for dashboard polling: branch display name + short HEAD.
+// Unlike git status, this does not scan the working tree.
+export function headView(cwd) {
+  const r = git(cwd, ["log", "-1", "--pretty=%h%x09%D"]);
+  if (!r.ok || !r.out) return { branch: null, short: null };
+  const [short, decorations = ""] = r.out.split("\t");
+  const head = decorations.split(",").map((s) => s.trim()).find((s) => s.startsWith("HEAD -> "));
+  return { branch: head ? head.slice(8) : null, short: short || null };
+}
+
+// A single status call supplies both cleanliness and paths.
+export function workingTree(cwd) {
+  const r = git(cwd, ["status", "--porcelain"]);
+  if (!r.ok) return { clean: null, dirty: [] };
+  const dirty = r.out ? r.out.split("\n").map((line) => line.trim()) : [];
+  return { clean: dirty.length === 0, dirty };
+}
+
 export function remoteUrl(cwd, name = "origin") {
   const r = git(cwd, ["remote", "get-url", name]);
   return r.ok && r.out !== "" ? r.out : null;

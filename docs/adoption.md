@@ -11,7 +11,7 @@ The workflow (Claude Code skill + Codex `AGENTS.md` snippet) is always deployed.
 The mode choice — **cli** or **mcp** *(recommended)* — only decides whether
 agents also get native `ahp_*` tools via an MCP server. Nothing is written into
 any project you work on; the worklog lives in `$XDG_DATA_HOME/agent-handoff/`,
-one file per project.
+one append-only worklog per Lane, grouped by Project.
 
 ## Per project — nothing to do
 
@@ -35,13 +35,29 @@ All three carry the same guidance: **if the `ahp_*` MCP tools are present, use
 them; otherwise run the `ahp` CLI.** So an agent with both installed prefers the
 structured MCP path and falls back to the shell.
 
+## Per work stream — select a Lane
+
+A Project may contain several independent Lanes. Run `ahp lane list`; use
+`--lane <id>` when the task clearly matches an existing title, description,
+scope or alias. With no Lane, the first `start` creates one from its plan. With
+one Lane, or exactly one held by the current worker, selection is automatic. If
+several remain plausible, AHP lists the existing choices plus a new Lane; ask
+the operator only when the descriptions do not resolve the ambiguity. Carry an
+explicit selection through `pickup`, `start` and later writes; once it is the
+sole Lane held by that worker, auto-selection can take over.
+
+`ahp lane create` and `ahp lane edit` keep those descriptions useful. A shared
+commit may appear in multiple Lanes; it is an association, not a duplicate. AHP
+does not decide whether code work uses the current branch or a separate
+branch/worktree.
+
 ## Seeing everything at once
 
 ```sh
-ahp dashboard        # every registered project: baton holder + plan, worklog
-                     # counts, open intents, verify, git state, and drift
-ahp dashboard -w     # live view (-n S to set the interval, ctrl-c to exit)
-ahp dashboard --json # for scripts; exit 1 if any project errors or has drift
+ahp dashboard        # every Project/Lane: baton, plan, counts, open intents,
+                     # verify, branch and short HEAD
+ahp dashboard -w     # redraws only when state changes (-n S sets the interval)
+ahp dashboard --json # for scripts; exit 1 if a Lane cannot be read or verified
 ```
 
 Unlike every other command it does **not** need to be run inside a repo — it
@@ -78,7 +94,8 @@ restart Codex / Cursor / VS Code / Windsurf.
 ## Retention
 
 `ahp compact --keep N` moves all but the last N sessions to
-`<store>/projects/<id>/archive/`, keeping any still-open intent in the live file.
+`<store>/projects/<id>/lanes/<lane>/archive/` (or the legacy `main` archive),
+keeping any still-open intent in that Lane's live file.
 Run it when `ahp log` gets long. Records are only ever *moved*, never rewritten.
 
 ## Back up the store (optional)

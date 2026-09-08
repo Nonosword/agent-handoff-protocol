@@ -1,186 +1,211 @@
-// `ahp dashboard` — cross-project overview, runnable from anywhere.
+// `ahp dashboard` — low-cost cross-project/Lane overview.
 
 import fs from "node:fs";
+import path from "node:path";
 import * as git from "./git.mjs";
 import * as project from "./project.mjs";
-import { worklogPath, storeHome } from "./paths.mjs";
+import * as lanes from "./lanes.mjs";
 import { readEntries, analyze } from "./worklog.mjs";
 
 export function colors({ on = process.stdout.isTTY && !process.env.NO_COLOR } = {}) {
-  const w = (c) => (s) => (on ? `[${c}m${s}[0m` : String(s));
+  const w = (code) => (value) => (on ? `\x1b[${code}m${value}\x1b[0m` : String(value));
   return {
     on,
-    accent: w("38;5;39"), ok: w("32"), warn: w("33"), err: w("31"),
-    rule: w("90"), subtle: w("38;5;250"), bold: w("1"),
-    held: w("38;5;39"), free: w("38;5;250")
+    accent: w("38;5;39"), warn: w("33"), err: w("31"),
+    rule: w("90"), subtle: w("38;5;248"), bold: w("1"),
+    held: w("38;5;39"), free: w("38;5;248")
   };
 }
 
 function ago(iso) {
   const ms = Date.now() - Date.parse(iso);
   if (!Number.isFinite(ms)) return "?";
-  const m = Math.round(ms / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 48) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }
 
-function workerLabel(w) {
-  if (!w) return "?";
-  if (typeof w === "string") return w;
-  return w.id ?? "?";
+function workerLabel(worker) {
+  if (!worker) return "?";
+  return typeof worker === "string" ? worker : worker.id ?? "?";
 }
 
-function gather(p, home) {
-  const worklog = worklogPath(p.id, home);
-  let entries = [];
+function fileMeta(file) {
+  try {
+    const stat = fs.statSync(file);
+    return { stamp: `${stat.size}:${stat.mtimeMs}`, updated: stat.mtime.toISOString() };
+  } catch {
+    return { stamp: "-", updated: null };
+  }
+}
+
+function projectDescriptor(entry) {
+  const dir = path.join(entry.home, "projects", entry.id);
+  return {
+    ...entry,
+    dir,
+    worklog: path.join(dir, "worklog.jsonl"),
+    lock: path.join(dir, ".lock")
+  };
+}
+
+function projectRoot(entry) {
+  return (entry.roots ?? []).find((root) => {
+    try { return fs.statSync(root).isDirectory(); } catch { return false; }
+  }) ?? null;
+}
+
+function gatherLane(lane) {
+  let analysis = null;
   let readError = null;
-  try { entries = readEntries(worklog); }
-  catch (e) { readError = e.message; }
-  const a = analyze(entries);
+  try { analysis = analyze(readEntries(lane.worklog)); }
+  catch (error) { readError = error.message; }
+  return { ...lane, analysis, readError, updated: fileMeta(lane.worklog).updated };
+}
 
-  const root = (p.roots ?? []).find((r) => git.isGitRepo(r)) ?? (p.roots ?? [])[0] ?? null;
-  const reachable = root ? git.isGitRepo(root) : false;
-  const g = reachable
-    ? { root, branch: git.branch(root), head: git.shortCommit(root), clean: git.isClean(root) }
-    : { root, reachable: false };
+function gatherProject(entry) {
+  const root = projectRoot(entry);
+  const head = root ? git.headView(root) : { branch: null, short: null };
+  let laneRows = [];
+  let laneError = null;
+  try { laneRows = lanes.list(projectDescriptor(entry), { includeArchived: false }).map(gatherLane); }
+  catch (error) { laneError = error.message; }
+  return { entry, root, head, lanes: laneRows, laneError };
+}
 
-  let drift = [];
-  const base = a.lastStart?.base?.commit;
-  if (reachable && base && base !== "unknown" && git.commitExists(root, base)) {
-    const since = git.logRange(root, base, "HEAD");
-    drift = since.filter((c) => !a.promotedCommits.some((pc) => pc === c.short || pc.startsWith(c.short) || c.short.startsWith(pc.slice(0, 7))));
+function registeredProjects(home) {
+  return project.list(home).map((entry) => ({ ...entry, home }));
+}
+
+function snapshot(home) {
+  return registeredProjects(home).map(gatherProject);
+}
+
+function toJson(rows, version, home) {
+  return {
+    version,
+    store: home,
+    projects: rows.map((row) => ({
+      id: row.entry.id,
+      name: row.entry.name,
+      remote: row.entry.remote ?? null,
+      root: row.root,
+      branch: row.head.branch,
+      head: row.head.short,
+      lanes: row.lanes.map((lane) => ({
+        id: lane.id,
+        title: lane.title,
+        description: lane.description,
+        scope: lane.scope,
+        aliases: lane.aliases,
+        status: lane.status,
+        baton: lane.analysis?.baton ? { ...lane.analysis.baton, plan: lane.analysis.lastStart?.plan ?? null } : null,
+        records: lane.analysis?.count ?? 0,
+        lastSeq: lane.analysis?.lastSeq ?? 0,
+        openIntents: lane.analysis?.openIntents.map((intent) => intent.intentId) ?? [],
+        verify: lane.readError
+          ? { error: lane.readError }
+          : { errors: lane.analysis.validation.errors, warnings: lane.analysis.validation.warnings, notes: lane.analysis.validation.notes }
+      }))
+    }))
+  };
+}
+
+function render(rows, home, { footer = "", version = null } = {}) {
+  const c = colors();
+  const out = [""];
+  const versionLabel = version ? ` v${version}` : "";
+  out.push(`  ${c.accent("Agent Handoff")}${versionLabel} ${c.subtle("·")} ${rows.length} project${rows.length === 1 ? "" : "s"}   ${c.subtle(home)}`);
+  out.push(`  ${c.rule("─".repeat(58))}`);
+
+  const allLanes = rows.flatMap((row) => row.lanes);
+  const held = allLanes.filter((lane) => lane.analysis?.batonHeld).length;
+  out.push(`  ${c.subtle(`${held} baton${held === 1 ? "" : "s"} held · ${allLanes.length - held} free · ${allLanes.length} Lane${allLanes.length === 1 ? "" : "s"}`)}`);
+  out.push("");
+
+  let anyError = false;
+  for (const [index, row] of rows.entries()) {
+    if (index > 0) {
+      out.push(`  ${c.rule("─".repeat(58))}`);
+      out.push("");
+    }
+    const gitLabel = row.root
+      ? `${c.subtle(row.root)}   ${c.subtle(row.head.branch ?? "?")}  ${c.subtle("@")} ${c.subtle(row.head.short ?? "?")}`
+      : c.subtle("path unavailable");
+    out.push(`  ${c.bold(row.entry.name)}  ${c.subtle(`[${row.entry.id}]`)}`);
+    out.push(`    ${gitLabel}`);
+
+    if (row.laneError) {
+      anyError = true;
+      out.push(`    ${c.err("✗ lanes:")} ${row.laneError}`);
+    } else if (row.lanes.length === 0) {
+      out.push(`    ${c.free("○")} ${c.subtle("no Lane yet — first start creates one from its plan")}`);
+    }
+
+    for (const lane of row.lanes) {
+      const a = lane.analysis;
+      const laneName = `${lane.id} · ${lane.title}`;
+      if (lane.readError) {
+        anyError = true;
+        out.push(`    ${c.err("✗")} ${c.bold(laneName)}  ${lane.readError}`);
+        continue;
+      }
+      if (!a.count) {
+        out.push(`    ${c.free("○")} ${c.bold(laneName)}  ${c.subtle("empty")}`);
+        continue;
+      }
+      if (a.batonHeld) {
+        out.push(`    ${c.held("●")} ${c.bold(laneName)}  held by ${c.bold(workerLabel(a.batonWorker))}  ${c.subtle(ago(a.lastStart.at))}`);
+        if (a.lastStart.plan) out.push(`      ${c.subtle(a.lastStart.plan.slice(0, 92))}`);
+      } else {
+        out.push(`    ${c.free("○")} ${c.bold(laneName)}  ${c.subtle("baton free")}`);
+      }
+      out.push(`      ${c.subtle(`${a.count} records · seq ${a.lastSeq} · ${a.promotes.length} promoted · ${a.openIntents.length} open${lane.updated ? ` · ${ago(lane.updated)}` : ""}`)}`);
+      if (a.validation.errors.length || a.validation.warnings.length) {
+        anyError = true;
+        out.push(`      ${c.warn(`⚠ verify: ${a.validation.errors.length} error(s), ${a.validation.warnings.length} warning(s)`)}`);
+      }
+    }
+    out.push("");
   }
 
-  let updated = null;
-  try { updated = fs.statSync(worklog).mtime.toISOString(); } catch { /* absent */ }
-
-  const lastAt = a.records.length ? a.records[a.records.length - 1].at : null;
-  const staleBaton = a.batonHeld && lastAt && (Date.now() - Date.parse(lastAt)) > 3_600_000;
-
-  return { p, a, g, reachable, readError, drift, updated, staleBaton };
+  if (!rows.length) out.push(`  ${c.subtle("nothing registered yet")}`);
+  if (footer) out.push(`  ${c.subtle(footer)}`);
+  return { text: out.join("\n") + "\n", anyError };
 }
 
-function toJson(rows) {
-  return rows.map(({ p, a, g, drift, staleBaton, readError }) => ({
-    id: p.id,
-    name: p.name,
-    remote: p.remote,
-    root: g.root,
-    rootReachable: g.reachable !== false,
-    branch: g.branch ?? null,
-    head: g.head ?? null,
-    treeClean: g.clean ?? null,
-    baton: a.baton ? { ...a.baton, plan: a.lastStart?.plan ?? null, stale: a.baton.phase === "held" && !!staleBaton } : null,
-    records: a.count,
-    lastSeq: a.lastSeq,
-    promoted: a.promotes.length,
-    openIntents: a.openIntents.map((i) => i.intentId),
-    verify: readError ? { error: readError } : { errors: a.validation.errors, warnings: a.validation.warnings, notes: a.validation.notes },
-    driftCommits: drift.map((c) => ({ short: c.short, subject: c.subject }))
+function fingerprint(home) {
+  const rows = registeredProjects(home);
+  return JSON.stringify(rows.map((entry) => {
+    const descriptor = projectDescriptor(entry);
+    let laneRows = [];
+    try { laneRows = lanes.list(descriptor, { includeArchived: false }); } catch { /* render reports details */ }
+    const root = projectRoot(entry);
+    const head = root ? git.headView(root) : { branch: null, short: null };
+    return [entry.id, entry.name, entry.roots, fileMeta(path.join(descriptor.dir, "lanes.json")).stamp, head.branch, head.short, ...laneRows.map((lane) => [lane.id, fileMeta(lane.worklog).stamp])];
   }));
 }
 
-function render(home, { footer = "", version = null } = {}) {
-  const rows = project.list(home).map((p) => gather(p, home));
-  const c = colors();
-  const L = [];
-  L.push("");
-  const versionLabel = version ? ` v${version}` : "";
-  L.push(`  ${c.accent("Agent Handoff")}${versionLabel} ${c.subtle("·")} ${rows.length} project${rows.length === 1 ? "" : "s"}   ${c.subtle(home)}`);
-  L.push(`  ${c.rule("─".repeat(58))}`);
-
-  if (rows.length === 0) {
-    L.push(`  ${c.subtle("nothing registered yet — run `ahp status` inside a git repo")}`);
-    if (footer) L.push(`  ${c.subtle(footer)}`);
-    return { text: L.join("\n") + "\n", anyError: false };
-  }
-
-  let anyError = false;
-  const held = rows.filter((r) => r.a.batonHeld).length;
-  L.push(`  ${c.subtle(`${held} baton${held === 1 ? "" : "s"} held · ${rows.length - held} free`)}`);
-  L.push("");
-
-  for (const [index, r] of rows.entries()) {
-    if (index > 0) {
-      L.push(`  ${c.rule("─".repeat(58))}`);
-      L.push("");
-    }
-    const { p, a, g } = r;
-    L.push(`  ${c.bold(p.name)}  ${c.subtle(`[${p.id}]`)}`);
-
-    if (g.reachable === false) {
-      L.push(`    ${c.warn("!")} ${c.subtle(g.root ?? "path unknown")} ${c.subtle("— not reachable from here")}`);
-    } else {
-      const tree = g.clean === null ? c.subtle("?") : g.clean ? c.subtle("clean") : c.warn("DIRTY");
-      L.push(`    ${c.subtle(g.root)}   ${c.subtle(g.branch ?? "?")}  ${tree}  ${c.subtle("@")} ${c.subtle(g.head ?? "?")}`);
-    }
-
-    if (a.count === 0) {
-      L.push(`    ${c.free("○")} ${c.subtle("worklog empty — never used")}`);
-    } else {
-      if (a.batonHeld) {
-        const s = r.staleBaton ? c.warn(` (stale — no activity ${ago(a.records.at(-1).at)})`) : "";
-        L.push(`    ${c.held("●")} held by ${c.bold(workerLabel(a.batonWorker))}  ${c.subtle(ago(a.lastStart.at))}${s}`);
-        if (a.lastStart.plan) L.push(`      ${c.subtle(a.lastStart.plan.slice(0, 92))}`);
-      } else {
-        L.push(`    ${c.free("○")} ${c.subtle("baton free")}`);
-      }
-      L.push(`    ${c.subtle(`${a.count} records · seq ${a.lastSeq} · ${a.promotes.length} promoted · ${a.openIntents.length} open${r.updated ? ` · ${ago(r.updated)}` : ""}`)}`);
-      if (a.openIntents.length) {
-        L.push(`      ${c.subtle("open:")} ${a.openIntents.map((i) => i.intentId).join(", ")}`);
-      }
-    }
-
-    if (r.readError) {
-      anyError = true;
-      L.push(`    ${c.err("✗ worklog:")} ${r.readError}`);
-    } else if (a.validation.errors.length) {
-      anyError = true;
-      L.push(`    ${c.err(`✗ verify: ${a.validation.errors.length} error(s)`)}`);
-      for (const e of a.validation.errors.slice(0, 3)) L.push(`      ${c.err(e)}`);
-    } else if (a.validation.warnings.length) {
-      anyError = true;
-      L.push(`    ${c.warn(`⚠ verify: ${a.validation.warnings.length} warning(s) (fails \`ahp verify\`; \`--lenient\` to allow)`)}`);
-      for (const w of a.validation.warnings.slice(0, 3)) L.push(`      ${c.warn(w)}`);
-    }
-
-    if (r.drift.length) {
-      anyError = true;
-      L.push(`    ${c.warn(`⚠ ${r.drift.length} commit(s) since the baton base with no intent.promote:`)}`);
-      for (const d of r.drift.slice(0, 5)) L.push(`      ${c.warn(`${d.short} ${d.subject}`)}`);
-    }
-
-    L.push("");
-  }
-
-  if (footer) L.push(`  ${c.subtle(footer)}`);
-  return { text: L.join("\n") + "\n", anyError };
-}
-
 function sleep(ms) {
-  return new Promise((r) => { setTimeout(r, ms); });
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-export async function dashboard({ home = storeHome(), version = null, json = false, watch = false, interval = 5 } = {}) {
+export async function dashboard({ home, version = null, json = false, watch = false, interval = 5 } = {}) {
   if (json) {
-    const rows = project.list(home).map((p) => gather(p, home));
-    process.stdout.write(`${JSON.stringify({ version, store: home, projects: toJson(rows) }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(toJson(snapshot(home), version, home), null, 2)}\n`);
     return 0;
   }
 
-  if (!watch) {
-    const { text, anyError } = render(home, { version });
-    process.stdout.write(text);
-    return anyError ? 1 : 0;
-  }
-
-  if (!process.stdout.isTTY) {
-    const { text, anyError } = render(home, { version, footer: "(--watch needs a TTY; showing one snapshot)" });
-    process.stdout.write(text);
-    return anyError ? 1 : 0;
+  if (!watch || !process.stdout.isTTY) {
+    const result = render(snapshot(home), home, {
+      version,
+      footer: watch ? "(--watch needs a TTY; showing one snapshot)" : ""
+    });
+    process.stdout.write(result.text);
+    return result.anyError ? 1 : 0;
   }
 
   const every = Math.max(1, Number(interval) || 5);
@@ -189,26 +214,23 @@ export async function dashboard({ home = storeHome(), version = null, json = fal
   const stop = () => { running = false; };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-
-  out.write("\x1b[?1049h\x1b[?25l"); // alternate screen, hide cursor
-  const restore = () => out.write("\x1b[?25h\x1b[?1049l");
+  out.write("\x1b[?1049h\x1b[?25l");
 
   try {
+    let key = fingerprint(home);
+    const first = render(snapshot(home), home, { version, footer: `watching every ${every}s · ctrl-c to exit` });
+    out.write(`\x1b[H${first.text}\x1b[J`);
     while (running) {
-      const now = new Date().toTimeString().slice(0, 8);
-      const { text } = render(home, { version, footer: `updated ${now} · every ${every}s · ctrl-c to exit` });
-      out.write(`\x1b[H\x1b[2J${text}`);
-      // wake early on resize so the view reflows promptly
-      let woke = false;
-      const onResize = () => { woke = true; };
-      process.on("SIGWINCH", onResize);
-      for (let waited = 0; running && !woke && waited < every * 1000; waited += 200) {
-        await sleep(200);
-      }
-      process.removeListener("SIGWINCH", onResize);
+      await sleep(every * 1000);
+      if (!running) break;
+      const next = fingerprint(home);
+      if (next === key) continue;
+      key = next;
+      const frame = render(snapshot(home), home, { version, footer: `changed ${new Date().toTimeString().slice(0, 8)} · watching every ${every}s · ctrl-c to exit` });
+      out.write(`\x1b[H${frame.text}\x1b[J`);
     }
   } finally {
-    restore();
+    out.write("\x1b[?25h\x1b[?1049l");
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
   }

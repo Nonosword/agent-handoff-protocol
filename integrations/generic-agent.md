@@ -6,9 +6,9 @@ For any agent (or human) that can run a shell command. Requires `ahp` on PATH
 ## Drop into the system prompt / rules file
 
 ```
-CONTINUITY — this workspace uses the Agent Handoff Protocol. The worklog lives
-outside the repo, in a central store keyed by the repo's Git identity. `ahp`
-manages it; the repo is never touched.
+CONTINUITY — this workspace uses the Agent Handoff Protocol. A Project groups
+independent Lane worklogs in a central store keyed by the repo's Git identity.
+`ahp` manages them; the repo is never touched.
 
 If `ahp_*` MCP tools are available, prefer them over the `ahp` shell commands
 (structured args, no quoting of the free-text fields). `ahp <verb>` ↔ `ahp_<verb>`.
@@ -19,10 +19,19 @@ Git unchanged. Preserve the exact error, do only read-only diagnosis, follow its
 permission/mount/sandbox guidance, then retry. Never silently switch to an
 in-repo worklog or proceed from memory.
 
+Resolve the Lane before the first change. Run `ahp lane list` when more than one
+exists. If the task clearly matches an id/title/description/scope/alias, select
+it with `--lane <id>` (or the MCP `lane` field) without asking. If none matches,
+create one with a concise title, description and scope. If several remain
+plausible, show the listed Lanes plus New Lane and ask the user. With no Lane,
+`start` creates one from its plan; a sole Lane or the sole Lane held by you is
+automatically selected. Carry the same explicit Lane through `pickup`, `start`
+and later writes. Do not create a near-duplicate Lane.
+
 At the start of a session, before editing anything:
-  1. Run `ahp pickup`. It shows the last handoff, the commits since its base,
-     which are accounted for, and any OPEN INTENTS (declared work not yet
-     promoted = probably uncommitted).
+  1. Run `ahp pickup` for the selected Lane. It shows the last handoff, a
+     compact commit view, and OPEN INTENTS. Use `--full` only when omitted
+     details are needed.
   2. For each open intent, inspect the working tree and decide: finish it,
      `wip:`-commit + promote it, or stash it.
   3. Run the project's own gate (tests/lint/build). Then:
@@ -42,8 +51,9 @@ The worklog is session continuity, not project memory. A landmine / next /
 finding is about the work in flight; a fact that outlives the session (an
 invariant, a "never do X") goes in the project's own docs, not the worklog.
 
-`ahp dashboard` shows every project at once — baton, open intents, drift — and
-is the one command that runs outside a repo (`-w` live, `--json` for scripts).
+`ahp dashboard` shows every Project/Lane at once — baton, open intents, verify,
+branch and short HEAD — and is the one command that runs outside a repo. `-w`
+redraws only after state changes; `--json` is for scripts.
 ```
 
 ## Reference

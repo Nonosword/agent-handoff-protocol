@@ -6,8 +6,8 @@ a project's `AGENTS.md` instead if you want it per-project.
 ```markdown
 ## Agent Handoff Protocol
 
-Session continuity across agent rotations. An append-only worklog in a central
-store outside this repo — the repo is never modified.
+Session continuity across agent rotations. A Project groups independent Lane
+worklogs in a central store outside this repo — the repo is never modified.
 
 If the `ahp_*` MCP tools are available this session, use those (structured
 arguments, no shell quoting of the free-text fields). Otherwise use the `ahp`
@@ -22,6 +22,15 @@ silently switch to an in-repo worklog or proceed from memory.
 Identify yourself so records aren't attributed to "unknown": via MCP this is
 automatic; via the CLI, `export AHP_WORKER_ID=codex AHP_MODEL=codex
 AHP_RUNTIME=codex-cli` once, or pass `--worker-id/--model/--runtime` on `ahp start`.
+
+Resolve the Lane before the first change. Run `ahp lane list` when more than one
+exists. If the task clearly matches an id/title/description/scope/alias, select
+it with `--lane <id>` (or the MCP `lane` field) without asking. If none matches,
+create one with a concise title, description and scope. If several remain
+plausible, show the listed Lanes plus New Lane and ask the user. With no Lane,
+`start` creates one from its plan; a sole Lane or the sole Lane held by you is
+automatically selected. Carry the same explicit Lane through `pickup`, `start`
+and later writes. Do not create a near-duplicate Lane.
 
 BEFORE the first change this session:
   ahp pickup
@@ -46,7 +55,7 @@ The worklog is session continuity, not project memory. A `landmine` / `next` /
 invariant, a "never do X here") goes in the project's own docs — prefer editing
 an existing one — not the worklog.
 
-`ahp dashboard` (every project at once — baton, open intents, drift; the one
-command that runs outside a repo; `-w` live, `--json` for scripts; CLI only) /
+`ahp dashboard` (every Project/Lane at once — baton, open intents, verify,
+branch + short HEAD; runs outside a repo; `-w` redraws on change; CLI only) /
 `ahp status` / `ahp log` / `ahp verify` / `ahp --help` for the rest.
 ```

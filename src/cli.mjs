@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import * as git from "./git.mjs";
 import * as project from "./project.mjs";
+import * as lanes from "./lanes.mjs";
 import { storeHome } from "./paths.mjs";
 import { readEntries, analyze, appendRecord } from "./worklog.mjs";
 import { validateRecords } from "./validate.mjs";
@@ -19,25 +20,25 @@ const PKG = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "u
 const HELP = `ahp — Agent Handoff Protocol (v${PKG.version})
 
   Continuity for rotated coding agents. The worklog lives in a central store
-  (${storeHome()}), one file per project, keyed by the project's Git identity.
+  (${storeHome()}), one append-only worklog per Lane, grouped by Git project.
   Your project repository is never touched.
 
 USAGE
   ahp <command> [options]
 
 READ
-  dashboard [-w] [-n S]  every project: baton, worklog state, drift. Runs from
-                         anywhere. -w/--watch refreshes (default 5s, -n/--interval).
+  dashboard [-w] [-n S]  every project and Lane: baton + worklog state. Runs from
+                         anywhere. -w polls and redraws only after a change (default 5s).
                          --json for scripts.
-  status                 project, baton holder, open intents, tree/gate state
-  pickup                 guided pickup: last handoff, commits since, open intents
+  status                 selected Lane, baton holder, open intents, tree/gate state
+  pickup [--full]        compact handoff, commit and open-intent summary; --full expands all
   read [--since N] [--tail K] [--type T] [--worker ID] [--field F] [--json]
                          --field projects one field (e.g. landmines, next) flat
                          across matching records; --field hazards = landmines +
                          findings together. --tail then counts values, not records.
-  log  [--worker ID]     human-readable rendering of the worklog
+  log  [--worker ID]     human-readable rendering of the selected Lane worklog
   verify [--lenient]     structural + lifecycle check (strict by default)
-  path                   print the worklog file path for this project
+  path                   print the selected Lane worklog path
 
 WRITE  (append-only; seq and timestamp are assigned for you)
   start  --plan TEXT --gate pass|fail|not-run [--evidence TEXT] [--continues N]
@@ -46,6 +47,11 @@ WRITE  (append-only; seq and timestamp are assigned for you)
                  [--landmine TEXT]... [--next TEXT]
   end  --reason limit|task-done|blocked|handoff-requested --summary TEXT
        --gate pass|fail|not-run [--evidence ...] [--finding TEXT]...
+
+LANES
+  lane list [--json]
+  lane create --title TEXT --description TEXT [--id ID] [--scope S]... [--alias A]...
+  lane edit <id> [--title TEXT] [--description TEXT] [--scope S]... [--alias A]...\n                 [--status active|blocked|done|archived]
 
 PROJECTS
   project list
@@ -62,6 +68,7 @@ MAINTENANCE
 
 GLOBAL
   --project <id|name>    override project detection (also AHP_PROJECT)
+  --lane <id|name>       select an existing Lane (also AHP_LANE)
   --cwd <dir>            resolve the project from this directory
   --version | -h/--help
 
@@ -124,6 +131,7 @@ async function run(argv) {
     case "intent": return cmdIntent(rest, home);
     case "end": return cmdEnd(rest, home);
     case "project": return cmdProject(rest, home);
+    case "lane": return cmdLane(rest, home);
     case "compact": return cmdCompact(rest, home);
     case "upgrade": return cmdUpgrade(rest);
     default:
@@ -136,6 +144,7 @@ async function run(argv) {
 
 const GLOBAL_OPTS = {
   project: { type: "string" },
+  lane: { type: "string" },
   cwd: { type: "string" },
   "worker-id": { type: "string" },
   model: { type: "string" },
@@ -153,14 +162,9 @@ function resolveProject(values, { registerMissing = false } = {}) {
 
 function gitView(root) {
   const cwd = root ?? process.cwd();
-  return {
-    root,
-    branch: root ? git.branch(cwd) : null,
-    short: root ? git.shortCommit(cwd) : null,
-    head: root ? git.headCommit(cwd) : null,
-    clean: root ? git.isClean(cwd) : null,
-    dirty: root ? git.dirtyPaths(cwd) : []
-  };
+  const head = root ? git.headView(cwd) : { branch: null, short: null };
+  const tree = root ? git.workingTree(cwd) : { clean: null, dirty: [] };
+  return { root, branch: head.branch, short: head.short, head: root ? git.headCommit(cwd) : null, ...tree };
 }
 
 function worker(values, fallbackFromLog) {
@@ -201,11 +205,55 @@ function requireProjectGit(proj) {
   return root && git.isGitRepo(root) ? root : (git.isGitRepo(process.cwd()) ? git.topLevel(process.cwd()) : null);
 }
 
+function laneTarget(proj, lane) {
+  return { ...proj, laneProject: proj, lane, worklog: lane.worklog, lock: lane.lock };
+}
+
+function resolveTarget(values, { registerMissing = false, autoPlan = null } = {}) {
+  const proj = resolveProject(values, { registerMissing });
+  const wanted = values.lane || process.env.AHP_LANE;
+  if (wanted) {
+    const lane = lanes.find(proj, wanted);
+    if (!lane) throw new Error(`unknown Lane "${wanted}" — run \`ahp lane list\``);
+    if (registerMissing && lane.status === "archived") throw new Error(`Lane "${lane.id}" is archived — edit its status or choose another Lane`);
+    return laneTarget(proj, lane);
+  }
+  const candidates = lanes.list(proj, { includeArchived: false });
+  if (candidates.length === 0) {
+    if (registerMissing && autoPlan) {
+      const title = String(autoPlan).trim().slice(0, 80);
+      const lane = lanes.create(proj, { title, description: String(autoPlan).trim() });
+      process.stdout.write(`lane.created ${lane.id} — ${lane.title}\n`);
+      return laneTarget(proj, lane);
+    }
+    if (registerMissing) {
+      throw new Error("no Lane exists — run `ahp start` to create one from its plan, or `ahp lane create`");
+    }
+    return proj;
+  }
+  if (candidates.length === 1) {
+    const lane = candidates[0];
+    return laneTarget(proj, lane);
+  }
+  const me = canonicalWorkerId(worker(values));
+  const heldByMe = candidates.filter((lane) => {
+    try {
+      const state = analyze(readEntries(lane.worklog));
+      return state.batonHeld && canonicalWorkerId(state.batonWorker) === me;
+    } catch { return false; }
+  });
+  if (heldByMe.length === 1) {
+    const lane = heldByMe[0];
+    return laneTarget(proj, lane);
+  }
+  throw new Error(lanes.formatChoices(candidates));
+}
+
 // --- read commands -------------------------------------------------------
 
 function cmdStatus(rest, home) {
   const { values } = parse(rest, { json: { type: "boolean" } });
-  const proj = resolveProject(values);
+  const proj = resolveTarget(values);
   const root = requireProjectGit(proj);
   const g = gitView(root);
   let analysis;
@@ -214,6 +262,7 @@ function cmdStatus(rest, home) {
   if (values.json) {
     process.stdout.write(JSON.stringify({
       project: { id: proj.id, name: proj.name },
+      lane: proj.lane ? { id: proj.lane.id, title: proj.lane.title, status: proj.lane.status } : null,
       baton: analysis.baton,
       openIntents: analysis.openIntents.map((i) => i.intentId),
       lastSeq: analysis.lastSeq,
@@ -230,28 +279,49 @@ function cmdStatus(rest, home) {
   return analysis.validation.errors.length ? 1 : 0;
 }
 
-function reconcileView(analysis, root) {
-  const commitToIntent = new Map();
-  const commitToIntentLong = new Map();
-  for (const p of analysis.promotes) {
-    for (const c of p.commits ?? []) {
-      commitToIntent.set(c, p.intentId);
-      commitToIntentLong.set(c.slice(0, 7), p.intentId);
+function relatedPromotionSources(proj, analysis, hasCommits) {
+  const sources = [{ laneId: proj.lane?.id ?? null, promotions: analysis.promotes }];
+  const unreadLanes = [];
+  if (!hasCommits || !proj.lane) return { sources, unreadLanes };
+  for (const lane of lanes.list(proj.laneProject ?? proj)) {
+    if (lane.id === proj.lane.id) continue;
+    try {
+      const promotions = readEntries(lane.worklog).map((entry) => entry.record)
+        .filter((record) => record.type === "intent.promote");
+      sources.push({ laneId: lane.id, promotions });
+    } catch {
+      unreadLanes.push(lane.id);
     }
   }
-  // Promotions commonly predate the latest handoff base, so absence from
-  // base..HEAD does not mean a commit is unreachable. Ask Git directly.
-  const danglingPromotes = root
-    ? analysis.promotes.filter(
-        (p) => (p.commits ?? []).length && !(p.commits ?? []).some((c) => git.isAncestor(root, c, "HEAD"))
-      )
+  return { sources, unreadLanes };
+}
+
+function reconcileView(analysis, root, { deep = false, sources, unreadLanes = [] } = {}) {
+  const commitToIntent = new Map();
+  const commitToIntentLong = new Map();
+  for (const source of sources) {
+    for (const promotion of source.promotions) {
+      for (const commit of promotion.commits ?? []) {
+        const label = source.laneId ? source.laneId + "/" + promotion.intentId : promotion.intentId;
+        const add = (map, key) => {
+          const values = map.get(key) ?? [];
+          values.push(label);
+          map.set(key, values);
+        };
+        add(commitToIntent, commit);
+        add(commitToIntentLong, commit.slice(0, 7));
+      }
+    }
+  }
+  const danglingPromotes = deep && root
+    ? analysis.promotes.filter((promotion) => (promotion.commits ?? []).length && !(promotion.commits ?? []).some((commit) => git.isAncestor(root, commit, "HEAD")))
     : [];
-  return { commitToIntent, commitToIntentLong, danglingPromotes };
+  return { commitToIntent, commitToIntentLong, danglingPromotes, unreadLanes };
 }
 
 function cmdPickup(rest, home) {
-  const { values } = parse(rest, {});
-  const proj = resolveProject(values);
+  const { values } = parse(rest, { full: { type: "boolean" } });
+  const proj = resolveTarget(values);
   const root = requireProjectGit(proj);
   const g = gitView(root);
   const analysis = analyze(readEntries(proj.worklog));
@@ -261,7 +331,8 @@ function cmdPickup(rest, home) {
       sinceCommits = git.logRange(root, analysis.lastStart.base.commit, "HEAD");
     }
   }
-  const reconcile = reconcileView(analysis, root);
+  const related = relatedPromotionSources(proj, analysis, sinceCommits.length > 0);
+  const reconcile = reconcileView(analysis, root, { deep: !!values.full, ...related });
   // "you've been here before" — resolve the prospective picker's identity and
   // find where it last held the baton, without moving the pickup anchor.
   const meId = workerId(worker(values));
@@ -275,7 +346,7 @@ function cmdPickup(rest, home) {
       if (handoffsSince >= 1) selfHistory = { seq: lastMine.seq, at: lastMine.at, handoffsSince, meId };
     }
   }
-  process.stdout.write(renderPickup({ project: proj, git: g, analysis, sinceCommits, reconcile, selfHistory }) + "\n");
+  process.stdout.write(renderPickup({ project: proj, git: g, analysis, sinceCommits, reconcile, selfHistory, full: !!values.full }) + "\n");
   return 0;
 }
 
@@ -317,7 +388,7 @@ function cmdRead(rest, home) {
     since: { type: "string" }, tail: { type: "string" }, type: { type: "string" },
     worker: { type: "string" }, field: { type: "string" }, json: { type: "boolean" }
   });
-  const proj = resolveProject(values);
+  const proj = resolveTarget(values);
   let records = readEntries(proj.worklog).map((e) => e.record);
   if (values.since) records = records.filter((r) => r.seq > Number(values.since));
   if (values.type) records = records.filter((r) => r.type === values.type);
@@ -345,7 +416,7 @@ function cmdRead(rest, home) {
 
 function cmdLog(rest, home) {
   const { values } = parse(rest, { worker: { type: "string" } });
-  const proj = resolveProject(values);
+  const proj = resolveTarget(values);
   let records = readEntries(proj.worklog).map((e) => e.record);
   if (values.worker) records = filterByWorker(records, values.worker);
   process.stdout.write((records.length ? renderLog(records) : "(no matching records)") + "\n");
@@ -357,7 +428,7 @@ function cmdVerify(rest, home) {
   // warnings to advisory (for an old or knowingly-messy log). `--strict` is still
   // accepted as a no-op. Notes are never fatal.
   const { values } = parse(rest, { strict: { type: "boolean" }, lenient: { type: "boolean" } });
-  const proj = resolveProject(values);
+  const proj = resolveTarget(values);
   let entries;
   try { entries = readEntries(proj.worklog); }
   catch (e) { process.stderr.write(`error: ${e.message}\n`); return 1; }
@@ -382,7 +453,7 @@ async function cmdUpgrade(rest) {
 
 function cmdPath(rest, home) {
   const { values } = parse(rest, {});
-  const proj = resolveProject(values);
+  const proj = resolveTarget(values);
   process.stdout.write(`${proj.worklog}\n`);
   return 0;
 }
@@ -395,7 +466,7 @@ function cmdStart(rest, home) {
   });
   if (!values.plan) throw new Error("start requires --plan");
   assertGate(values.gate, false);
-  const proj = resolveProject(values, { registerMissing: true });
+  const proj = resolveTarget(values, { registerMissing: true, autoPlan: values.plan });
   const root = requireProjectGit(proj);
   const g = gitView(root);
   const analysis = analyze(readEntries(proj.worklog));
@@ -431,7 +502,7 @@ function intentOpen(rest, home) {
     ref: { type: "string", multiple: true }, scope: { type: "string", multiple: true }
   });
   for (const f of ["id", "title", "intended"]) if (!values[f]) throw new Error(`intent open requires --${f}`);
-  const proj = resolveProject(values, { registerMissing: true });
+  const proj = resolveTarget(values, { registerMissing: true });
   const analysis = analyze(readEntries(proj.worklog));
   assertCanOpen(analysis.records, values.id);
   const sid = currentSessionId(analysis);
@@ -457,7 +528,7 @@ function intentPromote(rest, home) {
   for (const f of ["id", "actual"]) if (!values[f]) throw new Error(`intent promote requires --${f}`);
   assertGate(values.gate, false);
   const commits = values.commit ?? [];
-  const proj = resolveProject(values, { registerMissing: true });
+  const proj = resolveTarget(values, { registerMissing: true });
   const analysis = analyze(readEntries(proj.worklog));
   assertCanPromote(analysis.records, { id: values.id, gate: values.gate, commits, landmines: values.landmine ?? [] });
   const sid = currentSessionId(analysis);
@@ -486,7 +557,7 @@ function cmdEnd(rest, home) {
     throw new Error("--reason must be limit | task-done | blocked | handoff-requested");
   }
   assertGate(values.gate, false);
-  const proj = resolveProject(values, { registerMissing: true });
+  const proj = resolveTarget(values, { registerMissing: true });
   const root = requireProjectGit(proj);
   const g = gitView(root);
   const analysis = analyze(readEntries(proj.worklog));
@@ -526,7 +597,7 @@ function cmdProject(rest, home) {
   }
   if (sub === "current") {
     const proj = resolveProject(values);
-    process.stdout.write(`${proj.name}\t[${proj.id}]\t(${proj.source})\n${proj.worklog}\n`);
+    process.stdout.write(proj.name + "\t[" + proj.id + "]\t(" + proj.source + ")\n" + proj.worklog + "\n");
     return 0;
   }
   if (sub === "add") {
@@ -552,12 +623,55 @@ function cmdProject(rest, home) {
   throw new Error("project requires: list | current | add | rename | forget");
 }
 
+// --- Lane commands -----------------------------------------------------
+
+function cmdLane(rest, home) {
+  const sub = rest[0];
+  const { values, positionals } = parse(rest.slice(1), {
+    id: { type: "string" }, title: { type: "string" }, description: { type: "string" },
+    status: { type: "string" }, scope: { type: "string", multiple: true },
+    alias: { type: "string", multiple: true }, json: { type: "boolean" }
+  }, { allowPositionals: true });
+  const proj = resolveProject(values, { registerMissing: sub === "create" });
+  if (sub === "list") {
+    const items = lanes.list(proj);
+    if (values.json) {
+      process.stdout.write(JSON.stringify(items.map(({ worklog, lock, ...lane }) => lane)) + "\n");
+      return 0;
+    }
+    if (!items.length) { process.stdout.write("(no Lanes; first start creates one from its plan)\n"); return 0; }
+    for (const lane of items) {
+      let state;
+      try { state = analyze(readEntries(lane.worklog)); } catch { state = null; }
+      const baton = state?.batonHeld ? "held by " + labelWorker(state.batonWorker) : "free";
+      process.stdout.write(lane.id + "\t" + lane.title + "\t[" + lane.status + "]\t" + baton + "\n");
+      if (lane.description) process.stdout.write("  " + lane.description + "\n");
+      if (lane.scope.length) process.stdout.write("  scope: " + lane.scope.join(", ") + "\n");
+      if (lane.aliases.length) process.stdout.write("  aliases: " + lane.aliases.join(", ") + "\n");
+    }
+    return 0;
+  }
+  if (sub === "create") {
+    const lane = lanes.create(proj, { id: values.id, title: values.title, description: values.description, scope: values.scope, aliases: values.alias });
+    process.stdout.write("lane.created " + lane.id + " — " + lane.title + "\n");
+    return 0;
+  }
+  if (sub === "edit") {
+    const wanted = positionals[0];
+    if (!wanted) throw new Error("usage: ahp lane edit <id> [--title ... --description ... --status ...]");
+    const lane = lanes.edit(proj, wanted, { title: values.title, description: values.description, status: values.status, scope: values.scope, aliases: values.alias });
+    process.stdout.write("lane.updated " + lane.id + " — " + lane.title + " [" + lane.status + "]\n");
+    return 0;
+  }
+  throw new Error("lane requires: list | create | edit");
+}
+
 // --- compaction -------------------------------------------------------
 
 function cmdCompact(rest, home) {
   const { values } = parse(rest, { keep: { type: "string" } });
   const keep = values.keep ? Number(values.keep) : 3;
-  const proj = resolveProject(values, { registerMissing: true });
+  const proj = resolveTarget(values, { registerMissing: true });
   const entries = readEntries(proj.worklog);
   if (entries.length === 0) { process.stdout.write("(nothing to compact)\n"); return 0; }
 
@@ -574,7 +688,7 @@ function cmdCompact(rest, home) {
 
   const first = archived[0].record.seq;
   const last = archived[archived.length - 1].record.seq;
-  const archDir = path.join(proj.dir, "archive");
+  const archDir = path.join(path.dirname(proj.worklog), "archive");
   fs.mkdirSync(archDir, { recursive: true });
   const archFile = path.join(archDir, `${first}-${last}.jsonl`);
   fs.writeFileSync(archFile, archived.map((e) => JSON.stringify(e.record)).join("\n") + "\n");

@@ -62,30 +62,37 @@ args = ["<REPO>/bin/ahp-mcp"]
 or project `.mcp.json` in the same shape as Cursor's, above.
 
 The tools appear as `ahp_status`, `ahp_pickup`, `ahp_start`, `ahp_intent_open`,
-`ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`.
+`ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`, plus
+`ahp_lane_list`, `ahp_lane_create`, and `ahp_lane_edit`.
 
 ## Any MCP host
 
 Command: `node <REPO>/bin/ahp-mcp` · transport: stdio · protocol: `2025-06-18`.
 
-Each tool takes an optional `cwd` (directory to resolve the project from —
-default: the host's working directory) and `project` (explicit id/name).
+Worklog tools take optional `cwd` and `project` fields to resolve the Project,
+plus `lane` to select its work stream. Carry the same `lane` through pickup,
+start and writes; omit it only when no ambiguity exists.
+Lane-management tools resolve the Project from `cwd` / `project` directly.
 
 ## Tools
 
 | tool | purpose |
 | --- | --- |
 | `ahp_status` | project, baton holder, open intents, tree/gate state |
-| `ahp_pickup` | guided pickup — read before taking the baton |
+| `ahp_pickup` | compact guided pickup; `full:true` expands all detail |
 | `ahp_start` | append `handoff.start` (needs `plan`, `gate`) |
 | `ahp_intent_open` | declare a unit of work |
 | `ahp_intent_promote` | record its commit landed (`actual` / `landmines` / `next`) |
 | `ahp_end` | append `handoff.end` (best-effort) |
 | `ahp_read` | read records, or project one field (`field:"hazards"` = landmines + findings) |
-| `ahp_verify` | validate the worklog |
+| `ahp_verify` | validate the selected Lane worklog |
+| `ahp_lane_list` | list Lane descriptions and baton state |
+| `ahp_lane_create` | create a Lane only when no existing one matches |
+| `ahp_lane_edit` | refine Lane metadata or lifecycle status |
 
 ## Agent instruction
 
-Whichever host: add a line to the agent's rules — *"At session start call
-`ahp_pickup`, reconcile, then `ahp_start`. One `ahp_intent_open` /
-`ahp_intent_promote` per commit. `ahp_end` when stopping."*
+Whichever host: tell the agent to resolve the Project and Lane first. It should
+select a clear Lane match itself, create one only when none matches, and ask the
+operator only for genuine ambiguity. Then call `ahp_pickup`, reconcile, and
+`ahp_start`; use one intent per commit and `ahp_end` when stopping.

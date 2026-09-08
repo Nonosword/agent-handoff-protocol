@@ -7,6 +7,31 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.5.0 — 2026-09-08
+
+- Added Project Lanes: independent worklogs and batons under one Git Project,
+  with editable title, description, scope, aliases and lifecycle status. Existing
+  project-wide logs remain available as the synthetic `main` Lane. Registry
+  validation rejects unsafe ids and ambiguous routes; stale Lane locks left by a
+  cut-off process are reclaimed.
+- Lane selection is automatic when there is no ambiguity: first `start` creates
+  the first Lane from its plan; a sole Lane or the sole Lane held by the current
+  worker is selected; otherwise the CLI lists existing candidates plus a new
+  Lane. Agents pass `--lane` when task metadata makes the match clear and involve
+  the operator only for genuine ambiguity.
+- Added `ahp lane list/create/edit` and the matching MCP tools. A commit may be
+  promoted in multiple Lanes; AHP records associations and does not semantically
+  deduplicate commits or impose a branch/worktree policy. Pickup recognizes other Lanes' promotion associations before declaring a shared-branch commit unmatched.
+- `pickup` is compact by default: at most 10 commits (unmatched first), 5 open
+  intents and 10 dirty paths. `--full` is the single expansion switch and is also
+  the only mode that runs historical promotion reachability checks.
+- Dashboard JSON now nests Lane state under each Project. Polling reads only
+  small registry/worklog fingerprints and one
+  branch/short-HEAD Git view per Project. It does not scan `git status` or history
+  and does not redraw an unchanged frame, eliminating steady watch flicker.
+- Dashboard auxiliary text now uses ANSI-256 grey `248`; separator rules retain
+  ANSI `90`.
+
 ## 0.4.2 — 2026-09-07
 
 - Dashboard auxiliary text is now a semantic `subtle` token using neutral ANSI-256 `38;5;250` in every terminal, rather than relying on Tabby's overly dark ANSI bright-black mapping. Separator rules remain a separate ANSI `90` `rule` token, preserving hierarchy without lowering the text contrast.

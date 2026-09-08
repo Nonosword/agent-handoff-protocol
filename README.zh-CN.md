@@ -41,10 +41,10 @@ handoff.start   ── 下一个 agent：核对上一个 base 以来的提交，
 有 `intent.open` 却没有对应 `intent.promote`，就是下一个 agent 顺着找到 dirty tree 里那半截
 未完成工作的指针——**即使上一个 agent 没写 `handoff.end` 就消失了**。
 
-worklog 是每个项目一个 JSON-Lines 文件，**只追加**，按整数 `seq` 排序，存在用户级 store
-`$XDG_DATA_HOME/agent-handoff/` 下，按项目的 Git 身份索引——所以在任何子目录、
-重新 clone 之后都能认出来。你的仓库里什么都不加。（放仓库内的 `.coworker/worklog.jsonl`
-也是合法布局，见 [SPEC §4.3](./SPEC.md)。）
+**Project** 负责识别 Git 仓库；**Lane** 负责区分同一项目中的一条完整工作流。每个 Lane
+拥有独立的只追加 JSON-Lines worklog 和 baton，按整数 `seq` 排序，存在用户级 store
+`$XDG_DATA_HOME/agent-handoff/` 下。已有的项目级 worklog 会作为合成的 `main` Lane
+继续可读。项目仓库不会被写入，详见 [SPEC §4](./SPEC.md)。
 
 ## 安装
 
@@ -75,7 +75,7 @@ cd ~/Repositories/agent-handoff-protocol
 
 ```sh
 ahp status          # 项目、谁持棒、未完成 intent、tree/gate 状态
-ahp pickup          # 引导接棒：上次 handoff、之后的提交、未完成 intent
+ahp pickup          # 默认精简接棒；确实需要全部细节时再加 --full
 ahp start   --plan "加限流" --gate pass --evidence "188 tests pass"
 ahp intent open   --id i-0828-a --title "token bucket" --intended "按 IP、耗尽返回 429"
 ahp intent promote --id i-0828-a --commit 9f2e1df --gate pass \
@@ -86,6 +86,24 @@ ahp end     --reason limit --summary "3 个提交里落地了 1 个" --gate pass
 `status`、`pickup` 等读命令不会为了识别项目而写入；第一条写命令才会自动注册。
 `ahp` 从 Git 自动填 `seq`、时间戳、base 提交、工作区状态——你只提供含义。
 
+### Project 与 Lane 怎么选
+
+Project 仍自动识别；进入 Project 后按以下顺序选择 Lane：
+
+1. 没有 Lane：第一次 `ahp start` 根据 plan 自动创建。
+2. 只有一个可选 Lane，或只有一个 Lane 正由当前 worker 持棒：自动选择。
+3. 任务能明确匹配 Lane 的 id、标题、描述、scope 或 alias：agent 传
+   `--lane <id>`（MCP 使用 `lane` 字段）。
+4. 多个 Lane 仍都有可能：AHP 列出候选和“新建 Lane”；只有 agent 无法可靠判断时，
+   才请用户选择。
+
+显式选定后，`pickup`、`start` 和后续写命令应持续携带同一个 Lane；等它成为当前 worker
+唯一持棒的 Lane 后，才可安全依赖自动选择。
+可用 `ahp lane list/create/edit` 查看、创建和调整 Lane；agent 写简洁规范，用户可修改。
+同一 commit 被不同 Lane 的 intent 引用是合法的：AHP 记录关联关系，不拥有 commit，
+也不做语义去重。是否单开 branch/worktree，还是跟随当前分支，由 agent 根据代码隔离需求
+判断；AHP 不替 Git 工作流作决定。
+
 必需的 AHP 操作一旦报错，就视为没有完成。先保持项目不变，按错误中的目标路径、现场证据和
 下一步排查文件权限、只读挂载或沙箱授权，再重试到 CLI 退出码为 0（或 MCP 结果不是 error）。
 不得静默改用仓库内 worklog。
@@ -93,14 +111,14 @@ ahp end     --reason limit --summary "3 个提交里落地了 1 个" --gate pass
 在**任意目录**——一览所有项目：
 
 ```sh
-ahp dashboard       # 谁持棒 + 计划、worklog 状态、未完成 intent、verify、
-                    # git HEAD/tree,以及漂移检测(提交了但没 promote)
-ahp dashboard -w    # 实时视图——alternate screen 刷新,ctrl-c 退出
+ahp dashboard       # 每个 Project/Lane：baton、计划、未完成 intent、verify，
+                    # 外加 branch 和短 HEAD（不扫描工作区或 git log）
+ahp dashboard -w    # 只有状态变化才重绘；ctrl-c 退出
 ahp dashboard --json
 ```
 
 
-Dashboard 对所有辅助文字统一使用中性 ANSI-256 灰阶 `38;5;250`，不再依赖 Tabby 过暗的 ANSI bright-black 映射。分隔线仍使用独立的 ANSI `90`，保留更低的视觉权重。
+Dashboard 对辅助文字使用中性 ANSI-256 灰阶 `38;5;248`，不再依赖 Tabby 过暗的 ANSI bright-black 映射。分隔线仍使用独立的 ANSI `90`，保留更低的视觉权重。
 
 ## 记录类型
 
