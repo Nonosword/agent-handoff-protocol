@@ -221,8 +221,10 @@ function callTool(name, args) {
   const argv = toArgv(name, args);
   const env = { ...process.env };
   if (clientName) {
-    env.AHP_WORKER_ID ??= clientName;
-    env.AHP_RUNTIME ??= clientName;
+    // Empty inherited variables mean unspecified in normal host launchers;
+    // preserve a non-empty explicit AHP_* override, otherwise use clientInfo.
+    if (!env.AHP_WORKER_ID) env.AHP_WORKER_ID = clientName;
+    if (!env.AHP_RUNTIME) env.AHP_RUNTIME = clientName;
   }
   const res = spawnSync(process.execPath, [AHP_BIN, ...argv], { encoding: "utf8", shell: false, env });
   const out = `${res.stdout ?? ""}${res.stderr ? `\n${res.stderr}` : ""}`.trim();

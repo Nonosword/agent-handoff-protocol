@@ -299,6 +299,14 @@ record is a *severed* session for §7.1 purposes; a validator reports it as a
 note, not an error (§12). `ahp status --json` and `ahp dashboard --json` expose
 this object.
 
+Before appending `intent.open`, `intent.promote` or `handoff.end`, a conformant
+producer MUST, while holding the append lock and after re-reading the selected
+Lane worklog, verify that a baton is held and its canonical worker id equals the
+caller. It MUST reject a different worker rather than ending or attributing the
+active session. `handoff.start` remains the deliberate cutoff/recovery operation:
+a worker that completes §7.1 may start a new session, then may close an inherited
+open intent under its own baton.
+
 ## 7. Procedures
 
 ### 7.1 Pickup — every worker, every session

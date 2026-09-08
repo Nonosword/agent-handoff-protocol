@@ -215,6 +215,41 @@ test("sessionId: minted on start, echoed while the baton is held, in the baton s
   assert.match(ahp(["log"], P).out, new RegExp(`── session 1: ${start.sessionId} ·`));
 });
 
+test("only the current Lane baton holder can append, while a pickup may take over", () => {
+  const P = mkrepo("owner-guard");
+  const run = (id, args) => {
+    const result = spawnSync(process.execPath, [AHP, ...args], {
+      cwd: P,
+      env: { ...ENV, AHP_WORKER_ID: id },
+      encoding: "utf8"
+    });
+    return { code: result.status ?? -1, out: (result.stdout ?? "").trim(), err: (result.stderr ?? "").trim() };
+  };
+
+  assert.equal(run("codex", ["start", "--plan", "owner work", "--gate", "pass", "--evidence", "ok"]).code, 0);
+  const foreignOpen = run("qoder", ["intent", "open", "--id", "i-owner", "--title", "t", "--intended", "x"]);
+  assert.equal(foreignOpen.code, 1);
+  assert.match(foreignOpen.err, /baton is held by codex/);
+
+  assert.equal(run("codex", ["intent", "open", "--id", "i-owner", "--title", "t", "--intended", "x"]).code, 0);
+  const sha = commit(P, "owner work");
+  const foreignPromote = run("qoder", ["intent", "promote", "--id", "i-owner", "--commit", sha, "--gate", "pass", "--actual", "x"]);
+  assert.equal(foreignPromote.code, 1);
+  assert.match(foreignPromote.err, /baton is held by codex/);
+  const foreignEnd = run("qoder", ["end", "--reason", "task-done", "--summary", "x", "--gate", "pass", "--evidence", "ok"]);
+  assert.equal(foreignEnd.code, 1);
+  assert.match(foreignEnd.err, /baton is held by codex/);
+
+  // A new start is still the deliberate cutoff/recovery path. The new holder
+  // may finish an inherited open intent, but the former holder cannot end it.
+  assert.equal(run("qoder", ["start", "--plan", "resume", "--gate", "pass", "--evidence", "ok"]).code, 0);
+  const formerEnd = run("codex", ["end", "--reason", "task-done", "--summary", "x", "--gate", "pass", "--evidence", "ok"]);
+  assert.equal(formerEnd.code, 1);
+  assert.match(formerEnd.err, /baton is held by qoder/);
+  assert.equal(run("qoder", ["intent", "promote", "--id", "i-owner", "--commit", sha, "--gate", "pass", "--actual", "finished inherited intent"]).code, 0);
+  assert.equal(run("qoder", ["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "ok"]).code, 0);
+});
+
 test("baton snapshot agrees with the legacy batonHeld/batonWorker fold", () => {
   // shadow-compare: the new single projection must not disagree with the old
   // event fold for any bundled example, held or released.

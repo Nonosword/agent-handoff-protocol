@@ -7,6 +7,17 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.5.1 — 2026-09-08
+
+- Hardened Lane baton ownership: `intent.open`, `intent.promote`, and
+  `handoff.end` now verify under the append lock that the caller is the current
+  baton holder. A new `handoff.start` remains the explicit, recovery-safe
+  cutoff path; its new holder may finish an inherited open intent.
+- The same locked snapshot now supplies `sessionId`, carried open intents and a
+  default `continuesFrom`, closing the check-then-append race window.
+- MCP now treats empty inherited `AHP_WORKER_ID` / `AHP_RUNTIME` values as
+  unspecified and falls back to the identified `clientInfo` worker.
+
 ## 0.5.0 — 2026-09-08
 
 - Added Project Lanes: independent worklogs and batons under one Git Project,

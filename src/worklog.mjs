@@ -98,9 +98,10 @@ function sleepMs(ms) {
 
 // Append one record. Assigns `seq` and `at` if absent. Runs under the lock,
 // re-reads the tail so `seq` is correct, refuses to append after a corrupt line.
-// `derive(full)` runs after `seq`/`at` are assigned and its result is merged in
-// — for fields computed from the final seq (e.g. a handoff.start's sessionId).
-export function appendRecord(worklogFile, lockFile, record, { now = () => new Date().toISOString(), derive } = {}) {
+// `precondition(records, full)` and `derive(full, entries)` run under the same
+// lock after re-reading the worklog. This makes lifecycle checks atomic with the
+// append rather than trusting an earlier snapshot.
+export function appendRecord(worklogFile, lockFile, record, { now = () => new Date().toISOString(), precondition, derive } = {}) {
   try {
     fs.mkdirSync(path.dirname(worklogFile), { recursive: true });
     acquireLock(lockFile);
@@ -122,7 +123,9 @@ export function appendRecord(worklogFile, lockFile, record, { now = () => new Da
     if (!Number.isSafeInteger(full.seq) || full.seq <= prevSeq) {
       throw new Error(`seq ${full.seq} is not greater than the last seq ${prevSeq}`);
     }
-    if (derive) Object.assign(full, derive(full));
+    const records = entries.map((entry) => entry.record);
+    if (precondition) precondition(records, full);
+    if (derive) Object.assign(full, derive(full, entries));
     const line = `${JSON.stringify(full)}\n`;
     let fd;
     let writeStarted = false;

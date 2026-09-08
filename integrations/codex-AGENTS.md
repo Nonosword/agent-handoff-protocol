@@ -32,6 +32,12 @@ plausible, show the listed Lanes plus New Lane and ask the user. With no Lane,
 automatically selected. Carry the same explicit Lane through `pickup`, `start`
 and later writes. Do not create a near-duplicate Lane.
 
+Only the worker holding the selected Lane baton may write an intent or
+`handoff.end`. If AHP names a different holder, do not end or promote its
+session: pickup, reconcile, then use `start` if you must deliberately take over.
+That new holder may complete inherited open intents; `start` remains the normal
+hard-cutoff recovery path.
+
 BEFORE the first change this session:
   ahp pickup
 Read it: last handoff, commits since its base, and open intents (declared work

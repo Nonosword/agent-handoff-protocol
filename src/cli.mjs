@@ -10,7 +10,7 @@ import * as lanes from "./lanes.mjs";
 import { storeHome } from "./paths.mjs";
 import { readEntries, analyze, appendRecord } from "./worklog.mjs";
 import { validateRecords } from "./validate.mjs";
-import { assertCanOpen, assertCanPromote, assertCanEnd, makeSessionId, currentSessionId } from "./lifecycle.mjs";
+import { assertBatonOwner, assertCanOpen, assertCanPromote, assertCanEnd, makeSessionId, currentSessionId, project as projectState } from "./lifecycle.mjs";
 import { renderStatus, renderPickup, renderLog } from "./render.mjs";
 import { detectRuntime, canonicalWorkerId } from "./worker-detect.mjs";
 
@@ -207,6 +207,11 @@ function requireProjectGit(proj) {
 
 function laneTarget(proj, lane) {
   return { ...proj, laneProject: proj, lane, worklog: lane.worklog, lock: lane.lock };
+}
+
+function currentSessionPatch(entries) {
+  const sessionId = currentSessionId(projectState(entries.map((entry) => entry.record)));
+  return sessionId ? { sessionId } : {};
 }
 
 function resolveTarget(values, { registerMissing = false, autoPlan = null } = {}) {
@@ -470,9 +475,7 @@ function cmdStart(rest, home) {
   const root = requireProjectGit(proj);
   const g = gitView(root);
   const analysis = analyze(readEntries(proj.worklog));
-  const continuesFrom = values.continues !== undefined
-    ? Number(values.continues)
-    : (analysis.lastStart ? analysis.lastStart.seq : null);
+  const continuesFrom = values.continues !== undefined ? Number(values.continues) : undefined;
   if (analysis.batonHeld) {
     const w = analysis.batonWorker;
     process.stderr.write(`note: previous worker ${typeof w === "string" ? w : w?.id} wrote no handoff.end — assuming a cutoff and continuing\n`);
@@ -480,10 +483,16 @@ function cmdStart(rest, home) {
   const rec = appendRecord(proj.worklog, proj.lock, {
     type: "handoff.start",
     worker: worker(values),
-    continuesFrom,
+    ...(continuesFrom === undefined ? {} : { continuesFrom }),
     base: stateFrom(g, values.gate, values.evidence),
     plan: values.plan
-  }, { derive: (full) => ({ sessionId: makeSessionId(full.worker, full.at, full.seq) }) });
+  }, { derive: (full, entries) => {
+    const current = projectState(entries.map((entry) => entry.record));
+    return {
+      sessionId: makeSessionId(full.worker, full.at, full.seq),
+      ...(full.continuesFrom === undefined ? { continuesFrom: current.lastStart?.seq ?? null } : {})
+    };
+  } });
   process.stdout.write(`handoff.start seq ${rec.seq} — baton taken by ${labelWorker(rec.worker)} at ${rec.base.commit.slice(0, 12)} (gate ${rec.base.gate}) · session ${rec.sessionId}\n`);
   if (rec.base.gate === "not-run") process.stdout.write("reminder: gate=not-run — run the project's gate and record the result in your first intent.promote\n");
   return 0;
@@ -503,18 +512,21 @@ function intentOpen(rest, home) {
   });
   for (const f of ["id", "title", "intended"]) if (!values[f]) throw new Error(`intent open requires --${f}`);
   const proj = resolveTarget(values, { registerMissing: true });
-  const analysis = analyze(readEntries(proj.worklog));
-  assertCanOpen(analysis.records, values.id);
-  const sid = currentSessionId(analysis);
+  const actor = worker(values);
   const rec = appendRecord(proj.worklog, proj.lock, {
     type: "intent.open",
-    worker: worker(values, analysis.lastStart?.worker),
+    worker: actor,
     intentId: values.id,
     title: values.title,
     intended: values.intended,
-    ...(sid ? { sessionId: sid } : {}),
     ...(values.ref?.length ? { refs: values.ref } : {}),
     ...(values.scope?.length ? { scope: values.scope } : {})
+  }, {
+    precondition: (records) => {
+      assertCanOpen(records, values.id);
+      assertBatonOwner(records, actor);
+    },
+    derive: (_full, entries) => currentSessionPatch(entries)
   });
   process.stdout.write(`intent.open seq ${rec.seq} — ${values.id}\n`);
   return 0;
@@ -529,19 +541,22 @@ function intentPromote(rest, home) {
   assertGate(values.gate, false);
   const commits = values.commit ?? [];
   const proj = resolveTarget(values, { registerMissing: true });
-  const analysis = analyze(readEntries(proj.worklog));
-  assertCanPromote(analysis.records, { id: values.id, gate: values.gate, commits, landmines: values.landmine ?? [] });
-  const sid = currentSessionId(analysis);
+  const actor = worker(values);
   const rec = appendRecord(proj.worklog, proj.lock, {
     type: "intent.promote",
-    worker: worker(values, analysis.lastStart?.worker),
+    worker: actor,
     intentId: values.id,
     commits,
     gate: values.gate,
     actual: values.actual,
-    ...(sid ? { sessionId: sid } : {}),
     ...(values.landmine?.length ? { landmines: values.landmine } : {}),
     ...(values.next ? { next: values.next } : {})
+  }, {
+    precondition: (records) => {
+      assertCanPromote(records, { id: values.id, gate: values.gate, commits, landmines: values.landmine ?? [] });
+      assertBatonOwner(records, actor);
+    },
+    derive: (_full, entries) => currentSessionPatch(entries)
   });
   process.stdout.write(`intent.promote seq ${rec.seq} — ${values.id} → ${commits.join(", ") || "(wip)"} [gate ${values.gate}]\n`);
   return 0;
@@ -560,24 +575,27 @@ function cmdEnd(rest, home) {
   const proj = resolveTarget(values, { registerMissing: true });
   const root = requireProjectGit(proj);
   const g = gitView(root);
-  const analysis = analyze(readEntries(proj.worklog));
   const findings = values.finding ?? [];
   const gate = values.gate ?? "not-run";
   assertCanEnd({ gate, findings });
-  const sid = currentSessionId(analysis);
+  const actor = worker(values);
   const rec = appendRecord(proj.worklog, proj.lock, {
     type: "handoff.end",
-    worker: worker(values, analysis.lastStart?.worker),
+    worker: actor,
     reason: values.reason,
     end: stateFrom(g, values.gate, values.evidence),
     summary: values.summary,
-    openIntents: analysis.openIntents.map((i) => i.intentId),
-    ...(sid ? { sessionId: sid } : {}),
     ...(findings.length ? { findings } : {})
+  }, {
+    precondition: (records) => assertBatonOwner(records, actor),
+    derive: (_full, entries) => {
+      const state = projectState(entries.map((entry) => entry.record));
+      return { ...currentSessionPatch(entries), openIntents: state.openIntents.map((intent) => intent.intentId) };
+    }
   });
   process.stdout.write(`handoff.end seq ${rec.seq} — ${values.reason} at ${rec.end.commit.slice(0, 12)} (gate ${rec.end.gate})\n`);
-  if (analysis.openIntents.length) {
-    process.stdout.write(`carried ${analysis.openIntents.length} open intent(s): ${analysis.openIntents.map((i) => i.intentId).join(", ")}\n`);
+  if (rec.openIntents.length) {
+    process.stdout.write(`carried ${rec.openIntents.length} open intent(s): ${rec.openIntents.join(", ")}\n`);
   }
   return 0;
 }

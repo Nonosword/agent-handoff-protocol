@@ -104,6 +104,11 @@ Project 仍自动识别；进入 Project 后按以下顺序选择 Lane：
 也不做语义去重。是否单开 branch/worktree，还是跟随当前分支，由 agent 根据代码隔离需求
 判断；AHP 不替 Git 工作流作决定。
 
+只有当前 Lane baton 的持有者可以写入 `intent.open`、`intent.promote` 和
+`handoff.end`。其他 worker 不得替对方结束 session；应先 `pickup`，完成核对后用
+`start` 明确接棒。新持棒者可以完成上一个 session 遗留的 open intent；`start` 仍是
+hard cutoff 后合法的恢复路径。
+
 必需的 AHP 操作一旦报错，就视为没有完成。先保持项目不变，按错误中的目标路径、现场证据和
 下一步排查文件权限、只读挂载或沙箱授权，再重试到 CLI 退出码为 0（或 MCP 结果不是 error）。
 不得静默改用仓库内 worklog。

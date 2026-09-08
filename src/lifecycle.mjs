@@ -60,6 +60,20 @@ export function currentSessionId({ batonHeld, lastStart }) {
 
 // handoff.start is always allowed — a second start with no end between is a
 // hard cutoff, which is normal (SPEC §8). The caller surfaces it as a note.
+// All later writes belong to the worker who currently holds that Lane's baton.
+// A new worker takes ownership by running handoff.start after pickup; it may then
+// finish a prior session's open intent.
+export function assertBatonOwner(records, actor) {
+  const state = project(records);
+  if (!state.batonHeld || !state.baton) {
+    throw new Error("no active Lane baton — run ahp pickup then ahp start before writing an intent or handoff.end");
+  }
+  const caller = canonicalWorkerId(actor);
+  if (caller !== state.baton.worker) {
+    throw new Error("Lane baton is held by " + state.baton.worker + " (session " + state.baton.sessionId + "); " + caller + " cannot append to it. Run ahp pickup and, after reconciling, ahp start to take a new baton, or choose the correct --lane.");
+  }
+  return state;
+}
 
 export function assertCanOpen(records, id) {
   if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new Error("intent id must match [A-Za-z0-9._-]+");

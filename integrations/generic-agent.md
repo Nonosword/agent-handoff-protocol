@@ -26,7 +26,9 @@ create one with a concise title, description and scope. If several remain
 plausible, show the listed Lanes plus New Lane and ask the user. With no Lane,
 `start` creates one from its plan; a sole Lane or the sole Lane held by you is
 automatically selected. Carry the same explicit Lane through `pickup`, `start`
-and later writes. Do not create a near-duplicate Lane.
+and later writes. Do not create a near-duplicate Lane. Only the selected Lane's current baton
+holder may write an intent or `handoff.end`; a different worker must pickup and
+start a new session before completing inherited work.
 
 At the start of a session, before editing anything:
   1. Run `ahp pickup` for the selected Lane. It shows the last handoff, a

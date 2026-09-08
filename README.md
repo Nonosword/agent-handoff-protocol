@@ -125,6 +125,12 @@ associations, not commit ownership, and performs no semantic commit deduplicatio
 The agent still decides whether the work needs its own branch/worktree or can
 follow the current branch; AHP does not choose or enforce a Git strategy.
 
+Only the current Lane baton holder may append `intent.open`, `intent.promote`,
+or `handoff.end`. A different worker must not finish another session: run
+`pickup`, then use `start` to deliberately take over after reconciliation. That
+new holder may complete an inherited open intent; `start` remains the valid
+hard-cutoff recovery path.
+
 If a required AHP action fails, it did not happen. Keep the project unchanged,
 follow the error's target/evidence/next-step diagnostics, obtain filesystem or
 sandbox access as needed, and retry until the CLI exits 0 (or the MCP result is
