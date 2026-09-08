@@ -78,7 +78,8 @@ tools:
 - **mcp** *(recommended)* — the above, plus `ahp-mcp` registered as an MCP
   server with each detected host — Claude Code / Codex via their own `mcp add`
   CLI, Cursor / VS Code / Windsurf by merging into their MCP config file (never
-  touching anything else in it), Qoder via its `mcp add` CLI — so agents call
+  touching anything else in it), Qoder via its `mcp add` CLI, and Qoder CN via
+its separate `qoder-cn --add-mcp <JSON>` CLI — so agents call
   `ahp_pickup`, `ahp_start`, … directly. Structured arguments — no shell
   quoting of the free-text fields.
 

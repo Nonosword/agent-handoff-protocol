@@ -34,6 +34,23 @@ case "$(uname -s 2>/dev/null)" in
   Darwin) VSCODE_MCP="$HOME/Library/Application Support/Code/User/mcp.json" ;;
   *)      VSCODE_MCP="${XDG_CONFIG_HOME:-$HOME/.config}/Code/User/mcp.json" ;;
 esac
+# Qoder and Qoder CN are separate products. Keep every discovery and registration
+# handle separate: the CN CLI has --add-mcp, not Qoder's mcp add/list/remove API.
+QODER_APP="${QODER_APP:-/Applications/Qoder.app}"
+QODER_CONFIG="${QODER_CONFIG:-$HOME/.qoder}"
+QODER_CN_APP="${QODER_CN_APP:-/Applications/Qoder CN IDE.app}"
+QODER_CN_CONFIG="${QODER_CN_CONFIG:-$HOME/.qoder-cn}"
+QODER_CN_MCP="$QODER_CN_CONFIG/mcp.json"
+QODER_CLI="${QODER_CLI:-}"
+if [ -z "$QODER_CLI" ] && command -v qoder >/dev/null 2>&1; then QODER_CLI="$(command -v qoder)"; fi
+QODER_CN_CLI="${QODER_CN_CLI:-}"
+if [ -z "$QODER_CN_CLI" ] && command -v qoder-cn >/dev/null 2>&1; then
+  QODER_CN_CLI="$(command -v qoder-cn)"
+elif [ -z "$QODER_CN_CLI" ] && [ -x "$QODER_CN_APP/Contents/Resources/app/bin/qoder-cn" ]; then
+  QODER_CN_CLI="$QODER_CN_APP/Contents/Resources/app/bin/qoder-cn"
+fi
+[ -n "$QODER_CLI" ] && [ ! -x "$QODER_CLI" ] && QODER_CLI=""
+[ -n "$QODER_CN_CLI" ] && [ ! -x "$QODER_CN_CLI" ] && QODER_CN_CLI=""
 MARK_BEGIN="<!-- BEGIN agent-handoff-protocol -->"
 MARK_END="<!-- END agent-handoff-protocol -->"
 
@@ -249,11 +266,14 @@ if [ "$UNINSTALL" = 1 ]; then
     done
     [ "$removed" = 1 ] && ok "removed MCP registration" "$cli" || warn "MCP remove failed" "$cli mcp remove agent-handoff"
   done
-  if command -v qoder >/dev/null 2>&1; then
-    if [ "$DRY" = 1 ]; then dry "remove MCP registration" "qoder mcp remove agent-handoff"
-    elif qoder mcp remove agent-handoff >/dev/null 2>&1; then ok "removed MCP registration" "qoder"
-    else skip "no MCP registration" "qoder"; fi
+  if [ -n "$QODER_CLI" ]; then
+    if [ "$DRY" = 1 ]; then dry "remove MCP registration" "$QODER_CLI mcp remove agent-handoff"
+    elif "$QODER_CLI" mcp remove agent-handoff >/dev/null 2>&1; then ok "removed MCP registration" "Qoder"
+    else skip "no MCP registration" "Qoder"; fi
   fi
+  # Qoder CN has no remove subcommand. Its dedicated MCP JSON can be edited
+  # safely by the existing parse-and-merge helper without touching Qoder.
+  [ -f "$QODER_CN_MCP" ] && json_mcp_unregister "Qoder CN" "$QODER_CN_MCP" mcpServers
   json_mcp_unregister "Cursor" "$CURSOR_MCP" mcpServers
   json_mcp_unregister "VS Code" "$VSCODE_MCP" servers
   json_mcp_unregister "Windsurf" "$WINDSURF_MCP" mcpServers
@@ -348,16 +368,21 @@ HAS_CLAUDE=0; command -v claude >/dev/null 2>&1 && HAS_CLAUDE=1
 HAS_CODEX=0;  command -v codex  >/dev/null 2>&1 && HAS_CODEX=1
 [ "$HAS_CLAUDE" = 1 ] && ok "claude" "$(claude --version 2>/dev/null | head -1)" || skip "claude" "not found"
 [ "$HAS_CODEX" = 1 ]  && ok "codex"  "$(codex --version 2>/dev/null | head -1)"  || skip "codex" "not found"
-# These four have no MCP registration CLI of their own except Qoder — presence
-# is the app's own config dir (created on first run) or, when present, its CLI.
+# These hosts are independently detected through their own CLI, app or config.
 HAS_CURSOR=0;   { command -v cursor  >/dev/null 2>&1 || [ -d "$HOME/.cursor" ]; }            && HAS_CURSOR=1
 HAS_VSCODE=0;   { command -v code    >/dev/null 2>&1 || [ -d "$(dirname "$VSCODE_MCP")" ]; } && HAS_VSCODE=1
 HAS_WINDSURF=0; { command -v windsurf >/dev/null 2>&1 || [ -d "$HOME/.codeium/windsurf" ]; }  && HAS_WINDSURF=1
-HAS_QODER=0;    command -v qoder >/dev/null 2>&1 && HAS_QODER=1
+HAS_QODER=0;    { [ -n "$QODER_CLI" ] || [ -d "$QODER_APP" ] || [ -d "$QODER_CONFIG" ]; } && HAS_QODER=1
+HAS_QODER_CN=0; { [ -n "$QODER_CN_CLI" ] || [ -d "$QODER_CN_APP" ] || [ -d "$QODER_CN_CONFIG" ]; } && HAS_QODER_CN=1
 [ "$HAS_CURSOR" = 1 ]   && ok "cursor" "detected"   || skip "cursor" "not found"
 [ "$HAS_VSCODE" = 1 ]   && ok "vs code" "detected"  || skip "vs code" "not found"
 [ "$HAS_WINDSURF" = 1 ] && ok "windsurf" "detected" || skip "windsurf" "not found"
-[ "$HAS_QODER" = 1 ]    && ok "qoder" "$(qoder --version 2>/dev/null | head -1)" || skip "qoder" "not found"
+if [ -n "$QODER_CLI" ]; then ok "qoder" "$("$QODER_CLI" --version 2>/dev/null | head -1)"
+elif [ "$HAS_QODER" = 1 ]; then ok "qoder" "detected (CLI unavailable; $QODER_CONFIG)"
+else skip "qoder" "not found"; fi
+if [ -n "$QODER_CN_CLI" ]; then ok "qoder cn" "$("$QODER_CN_CLI" --version 2>/dev/null | head -1)"
+elif [ "$HAS_QODER_CN" = 1 ]; then ok "qoder cn" "detected (CLI unavailable; $QODER_CN_CONFIG)"
+else skip "qoder cn" "not found"; fi
 
 if [ -z "$MODE" ]; then
   menu "How should agents call ahp?" \
@@ -454,22 +479,42 @@ register_host() {
   fi
 }
 
-# Qoder ships a real `mcp add`/`mcp list`/`mcp remove` CLI (unlike the three
-# above). No `mcp get`, so idempotency is a `list | grep` check rather than
-# register_host's get-then-compare. Env flags aren't documented for it, so
-# worker identity comes from the MCP initialize handshake instead (mcp.mjs).
+# Qoder's global CLI exposes mcp add/list/remove. It is intentionally separate
+# from Qoder CN, whose CLI only accepts --add-mcp <JSON>.
 register_qoder() {
-  if [ "$DRY" = 1 ]; then dry "register with Qoder" "qoder mcp add … agent-handoff -- node …/ahp-mcp"; return 0; fi
-  command -v qoder >/dev/null 2>&1 || return 1
-  if qoder mcp list 2>/dev/null | grep -q agent-handoff; then
+  [ -n "$QODER_CLI" ] || return 1
+  if [ "$DRY" = 1 ]; then dry "register with Qoder" "$QODER_CLI mcp add … agent-handoff -- node …/ahp-mcp"; return 0; fi
+  if "$QODER_CLI" mcp list 2>/dev/null | grep -q agent-handoff; then
     skip "Qoder MCP entry" "already registered — restart Qoder to load code updates"
     return 0
   fi
   local out
-  if out=$(qoder mcp add agent-handoff -s user -- node "$REPO/bin/ahp-mcp" 2>&1); then
+  if out=$("$QODER_CLI" mcp add agent-handoff -s user -- node "$REPO/bin/ahp-mcp" 2>&1); then
     ok "registered with Qoder" "restart Qoder to load it"
   else
-    bad "qoder mcp add failed" "$(printf '%s' "$out" | grep -v '^[[:space:]]*$' | head -1)"
+    bad "Qoder mcp add failed" "$(printf '%s' "$out" | grep -v '^[[:space:]]*$' | head -1)"
+    hint "add it by hand — see integrations/mcp.md"
+  fi
+}
+
+qoder_cn_entry_current() {
+  [ -f "$QODER_CN_MCP" ] || return 1
+  node -e 'try { const fs = require("fs"); const doc = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const entry = doc.mcpServers?.["agent-handoff"]; process.exit(entry?.command === "node" && entry?.args?.[0] === process.argv[2] ? 0 : 1); } catch { process.exit(1); }' "$QODER_CN_MCP" "$REPO/bin/ahp-mcp"
+}
+
+register_qoder_cn() {
+  [ -n "$QODER_CN_CLI" ] || return 1
+  local entry out
+  entry=$(printf '{"name":"agent-handoff","command":"node","args":["%s/bin/ahp-mcp"]}' "$REPO")
+  if [ "$DRY" = 1 ]; then dry "register with Qoder CN" "$QODER_CN_CLI --add-mcp <JSON>"; return 0; fi
+  if qoder_cn_entry_current; then
+    skip "Qoder CN MCP entry" "already registered — restart Qoder CN to load code updates"
+    return 0
+  fi
+  if out=$("$QODER_CN_CLI" --add-mcp "$entry" 2>&1); then
+    ok "registered with Qoder CN" "restart Qoder CN to load it"
+  else
+    bad "Qoder CN --add-mcp failed" "$(printf '%s' "$out" | grep -v '^[[:space:]]*$' | head -1)"
     hint "add it by hand — see integrations/mcp.md"
   fi
 }
@@ -518,10 +563,18 @@ EOF
   else skip "Windsurf" "not found"; fi
 
   register_qoder || {
-    [ -d "$HOME/.qoder" ] && {
-      warn "Qoder CLI" "not found — register by hand once installed:"
+    [ "$HAS_QODER" = 1 ] && {
+      warn "Qoder CLI" "not found — register by hand once its Qoder CLI is installed:"
       snippet <<EOF
 qoder mcp add agent-handoff -s user -- node $REPO/bin/ahp-mcp
+EOF
+    }
+  }
+  register_qoder_cn || {
+    [ "$HAS_QODER_CN" = 1 ] && {
+      warn "Qoder CN CLI" "not found — use Qoder CN's own CLI, never qoder mcp:"
+      snippet <<EOF
+$QODER_CN_APP/Contents/Resources/app/bin/qoder-cn --add-mcp '{"name":"agent-handoff","command":"node","args":["$REPO/bin/ahp-mcp"]}'
 EOF
     }
   }
@@ -529,7 +582,7 @@ EOF
   if [ "$DRY" != 1 ]; then
     if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
       | node "$REPO/bin/ahp-mcp" 2>/dev/null | grep -q '"serverInfo"'; then
-      ok "MCP server self-test" "initialize handshake OK · 8 tools"
+      ok "MCP server self-test" "initialize handshake OK · 11 tools"
     else bad "MCP server self-test failed"; fi
   fi
 }

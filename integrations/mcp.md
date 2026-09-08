@@ -6,17 +6,24 @@ out — the free-text fields go as structured strings, not through shell quoting
 The skill / `AGENTS.md` snippet tell agents to prefer these tools when present.
 
 `install.sh --mode mcp` registers this automatically with each host it detects.
-Claude Code, Codex and Qoder have their own MCP CLI:
+**Qoder** and **Qoder CN are separate products**: detection reports each one
+independently and never folds CN into the Qoder result.
 
 ```sh
-claude mcp add agent-handoff -- node <REPO>/bin/ahp-mcp
-codex  mcp add agent-handoff -- node <REPO>/bin/ahp-mcp
-qoder  mcp add agent-handoff -s user -- node <REPO>/bin/ahp-mcp
+# Qoder: its global CLI supports MCP subcommands.
+qoder mcp add agent-handoff -s user -- node <REPO>/bin/ahp-mcp
+
+# Qoder CN: its app CLI accepts a server-definition JSON, not `mcp add`.
+qoder-cn --add-mcp '{"name":"agent-handoff","command":"node","args":["<REPO>/bin/ahp-mcp"]}'
 ```
 
-All idempotent and edit the host's config safely; `<REPO>` is the absolute path
-to your clone. Restart the host to load the server. Remove with
-`<host> mcp remove agent-handoff`.
+The installer invokes only a detected host's matching CLI: Qoder's `mcp
+add/list/remove` interface, or Qoder CN's `--add-mcp <JSON>` interface. It
+locates CN from `qoder-cn` on PATH or
+`/Applications/Qoder CN IDE.app/Contents/Resources/app/bin/qoder-cn`, and
+checks the independent `~/.qoder-cn/mcp.json`; it never calls `qoder mcp` for
+CN. Restart the host after registration. Qoder CN exposes no remove CLI, so
+`--uninstall` safely removes only AHP's entry from its dedicated MCP JSON.
 
 Cursor, VS Code and Windsurf have no registration CLI, so the installer merges
 one entry into their dedicated MCP config file directly (a real JSON
@@ -60,6 +67,16 @@ args = ["<REPO>/bin/ahp-mcp"]
 
 **Qoder** — CLI (`qoder mcp add agent-handoff -s user -- node <REPO>/bin/ahp-mcp`)
 or project `.mcp.json` in the same shape as Cursor's, above.
+
+**Qoder CN** — its own app CLI, not a Qoder alias:
+
+```sh
+qoder-cn --add-mcp '{"name":"agent-handoff","command":"node","args":["<REPO>/bin/ahp-mcp"]}'
+```
+
+On macOS the bundled CLI is normally
+`/Applications/Qoder CN IDE.app/Contents/Resources/app/bin/qoder-cn`; its user
+MCP config is `~/.qoder-cn/mcp.json`.
 
 The tools appear as `ahp_status`, `ahp_pickup`, `ahp_start`, `ahp_intent_open`,
 `ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`, plus

@@ -61,7 +61,8 @@ cd ~/Repositories/agent-handoff-protocol
 - **cli** —— agent 跑 `ahp` CLI；skill / 片段负责教流程。
 - **mcp**（推荐）—— 以上全部，外加把 `ahp-mcp` 注册给每个检测到的 host：Claude Code /
   Codex 用各自的 `mcp add` CLI，Cursor / VS Code / Windsurf 合并进它们的 MCP 配置文件
-  （绝不动文件里其他内容），Qoder 用它的 `mcp add` CLI。agent 直接调 `ahp_pickup`、
+  （绝不动文件里其他内容），普通 Qoder 用 `mcp add` CLI，Qoder CN 则只用独立的
+`qoder-cn --add-mcp <JSON>` CLI。agent 直接调 `ahp_pickup`、
   `ahp_start` ……。结构化参数，自由文本字段不用过 shell 转义。
 
 两者都装时，agent 优先用 MCP 工具，没有则回退到 CLI。`./install.sh --mode cli|mcp`

@@ -7,6 +7,18 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.5.2 — 2026-09-08
+
+- Split Qoder and Qoder CN into independently reported installer hosts. Each
+  has its own CLI, app path and user configuration directory; CN is never
+  treated as a Qoder alias.
+- Qoder continues to use its detected `qoder mcp add/list/remove` CLI. Qoder CN
+  is registered only through its detected `qoder-cn --add-mcp <JSON>` CLI; the
+  installer never routes CN through `qoder mcp`.
+- Qoder CN idempotence checks its own `~/.qoder-cn/mcp.json`; uninstall removes
+  only AHP's entry from that dedicated JSON because the CN CLI has no remove
+  command. Added an isolated CN-only installer dry-run regression test.
+
 ## 0.5.1 — 2026-09-08
 
 - Hardened Lane baton ownership: `intent.open`, `intent.promote`, and

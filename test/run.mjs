@@ -150,12 +150,45 @@ test("start requires --plan and --gate", () => {
 });
 
 test("full cycle: start -> intent open -> promote -> end", () => {
-  assert.equal(ahp(["start", "--plan", "feature X", "--gate", "pass", "--evidence", "2 tests", "--worker-id", "w1", "--model", "codex"], A).code, 0);
-  assert.equal(ahp(["intent", "open", "--id", "i-1", "--title", "core", "--intended", "do it"], A).code, 0);
+  assert.equal(ahp(["start", "--plan", "feature X", "--gate", "pass", "--evidence", "2 tests", "--worker-id", "codex", "--model", "codex"], A).code, 0);
+  assert.equal(ahp(["intent", "open", "--id", "i-1", "--title", "core", "--intended", "do it", "--worker-id", "codex"], A).code, 0);
   const sha = commit(A, "feat: core");
-  assert.equal(ahp(["intent", "promote", "--id", "i-1", "--commit", sha, "--gate", "pass", "--actual", "done", "--landmine", "no docs", "--next", "docs"], A).code, 0);
-  const end = ahp(["end", "--reason", "limit", "--summary", "1 commit", "--gate", "pass", "--evidence", "3 tests"], A);
+  assert.equal(ahp(["intent", "promote", "--id", "i-1", "--commit", sha, "--gate", "pass", "--actual", "done", "--landmine", "no docs", "--next", "docs", "--worker-id", "codex"], A).code, 0);
+  const end = ahp(["end", "--reason", "limit", "--summary", "1 commit", "--gate", "pass", "--evidence", "3 tests", "--worker-id", "codex"], A);
   assert.equal(end.code, 0, end.err);
+});
+
+test("installer detects Qoder CN separately and never routes it through qoder mcp", () => {
+  const root = path.join(TMP, "installer-qoder-cn");
+  const home = path.join(root, "home");
+  const cnConfig = path.join(home, ".qoder-cn");
+  const fakeCn = path.join(root, "qoder-cn");
+  fs.mkdirSync(cnConfig, { recursive: true });
+  fs.writeFileSync(path.join(cnConfig, "mcp.json"), '{"mcpServers":{}}\n');
+  fs.writeFileSync(fakeCn, "#!/usr/bin/env bash\nif [ \"${1:-}\" = \"--version\" ]; then echo 1.28.0; exit 0; fi\necho unexpected >&2; exit 9\n");
+  fs.chmodSync(fakeCn, 0o755);
+  const result = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "mcp", "--dry-run", "--no-color"], {
+    cwd: REPO,
+    env: {
+      ...ENV,
+      HOME: home,
+      AHP_BIN_DIR: path.join(root, "bin"),
+      AHP_HOME: path.join(root, "store"),
+      QODER_APP: path.join(root, "no-qoder.app"),
+      QODER_CONFIG: path.join(home, ".qoder"),
+      QODER_CN_APP: path.join(root, "Qoder CN IDE.app"),
+      QODER_CN_CONFIG: cnConfig,
+      QODER_CN_CLI: fakeCn
+    },
+    encoding: "utf8",
+    shell: false
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const output = result.stdout;
+  assert.match(output, /qoder\s+not found/);
+  assert.match(output, /qoder cn\s+1\.28\.0/);
+  assert.match(output, /register with Qoder CN[\s\S]*--add-mcp <JSON>/);
+  assert.doesNotMatch(output, /register with Qoder[\s\S]*mcp add/);
 });
 
 test("verify passes for the produced worklog", () => {
