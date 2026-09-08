@@ -89,8 +89,9 @@ function saveFile(project, data) {
 
 function mutateFile(project, operation) {
   const lock = path.join(project.dir, ".lanes.lock");
+  let token;
   try {
-    acquireLock(lock);
+    token = acquireLock(lock);
   } catch (error) {
     throw explainStoreFsError(error, {
       operation: "lock the Lane registry",
@@ -105,7 +106,7 @@ function mutateFile(project, operation) {
     saveFile(project, data);
     return result;
   } finally {
-    releaseLock(lock);
+    releaseLock(lock, token);
   }
 }
 

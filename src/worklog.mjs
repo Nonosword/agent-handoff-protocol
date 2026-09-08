@@ -6,8 +6,6 @@ import { parseJsonl, validateRecords } from "./validate.mjs";
 import { project } from "./lifecycle.mjs";
 import { explainStoreFsError } from "./storage-errors.mjs";
 
-const LOCK_STALE_MS = 60_000;
-
 export function readText(worklogFile) {
   try { return fs.readFileSync(worklogFile, "utf8"); }
   catch (error) {
@@ -50,25 +48,30 @@ export function acquireLock(lockFile) {
   fs.mkdirSync(path.dirname(lockFile), { recursive: true });
   for (let attempt = 0; attempt < 100; attempt += 1) {
     let fd;
+    let token;
     try {
       fd = fs.openSync(lockFile, "wx", 0o600);
-      fs.writeSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
+      token = `${process.pid}\n${new Date().toISOString()}\n${process.pid}-${Math.random().toString(36).slice(2)}\n`;
+      writeAllSync(fd, token);
       fs.fsyncSync(fd);
-      return;
+      return token;
     } catch (e) {
       if (e.code !== "EEXIST") {
-        try { fs.rmSync(lockFile, { force: true }); } catch { /* best effort */ }
+        // A failed exclusive create says nothing about an existing owner's
+        // validity. In particular, EACCES/EROFS must never unlink its lock.
+        if (token) releaseLock(lockFile, token);
         throw e;
       }
-      // stale-lock reclaim: dead pid, or older than LOCK_STALE_MS
+      // Reclaim only a lock whose recorded PID is definitely dead. A live PID
+      // wins over its age: a paused process or slow mount must not admit a
+      // second writer into the critical section.
       let stale = false;
       try {
-        const [pidLine, tsLine] = fs.readFileSync(lockFile, "utf8").split("\n");
+        const [pidLine] = fs.readFileSync(lockFile, "utf8").split("\n");
         const pid = Number.parseInt(pidLine, 10);
-        const age = Date.now() - Date.parse(tsLine || "");
         const alive = pidAlive(pid);
-        if (!alive || (Number.isFinite(age) && age > LOCK_STALE_MS)) stale = true;
-      } catch { stale = true; }
+        if (!alive) stale = true;
+      } catch { /* unreadable/invalid locks are not safe to reclaim */ }
       if (stale) { try { fs.rmSync(lockFile, { force: true }); } catch { /* race */ } continue; }
       sleepMs(20);
     } finally {
@@ -81,8 +84,12 @@ export function acquireLock(lockFile) {
   throw error;
 }
 
-export function releaseLock(lockFile) {
-  try { fs.rmSync(lockFile, { force: true }); } catch { /* ignore */ }
+export function releaseLock(lockFile, token = null) {
+  try {
+    // Do not delete a lock that was replaced after an error/recovery race.
+    if (token !== null && fs.readFileSync(lockFile, "utf8") !== token) return;
+    fs.rmSync(lockFile, { force: true });
+  } catch { /* best effort */ }
 }
 
 function pidAlive(pid) {
@@ -96,15 +103,51 @@ function sleepMs(ms) {
   Atomics.wait(SLEEP_BUF, 0, 0, ms);
 }
 
+export function writeAllSync(fd, value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = fs.writeSync(fd, bytes, offset, bytes.length - offset);
+    if (!Number.isInteger(written) || written <= 0) {
+      const error = new Error("short write while writing store data");
+      error.code = "EIO";
+      throw error;
+    }
+    offset += written;
+  }
+}
+
+// A durable replacement for small registry/worklog files. Callers decide the
+// locking policy; this function makes one replacement crash-safe locally.
+export function writeFileAtomic(file, text) {
+  const dir = path.dirname(file);
+  const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
+  let fd;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fd = fs.openSync(tmp, "wx", 0o600);
+    writeAllSync(fd, text);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* best effort */ } }
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    throw error;
+  }
+}
+
 // Append one record. Assigns `seq` and `at` if absent. Runs under the lock,
 // re-reads the tail so `seq` is correct, refuses to append after a corrupt line.
 // `precondition(records, full)` and `derive(full, entries)` run under the same
 // lock after re-reading the worklog. This makes lifecycle checks atomic with the
 // append rather than trusting an earlier snapshot.
 export function appendRecord(worklogFile, lockFile, record, { now = () => new Date().toISOString(), precondition, derive } = {}) {
+  let lockToken;
   try {
     fs.mkdirSync(path.dirname(worklogFile), { recursive: true });
-    acquireLock(lockFile);
+    lockToken = acquireLock(lockFile);
   } catch (error) {
     throw explainStoreFsError(error, {
       operation: "prepare the worklog write",
@@ -112,6 +155,10 @@ export function appendRecord(worklogFile, lockFile, record, { now = () => new Da
       effect: "No worklog record was written."
     });
   }
+  return appendUnderLock(worklogFile, record, { now, precondition, derive, lockFile, lockToken });
+}
+
+function appendUnderLock(worklogFile, record, { now, precondition, derive, lockFile, lockToken }) {
   try {
     let entries;
     try { entries = readEntries(worklogFile); }
@@ -131,7 +178,10 @@ export function appendRecord(worklogFile, lockFile, record, { now = () => new Da
     let writeStarted = false;
     try {
       fd = fs.openSync(worklogFile, "a");
-      writeStarted = fs.writeSync(fd, line) > 0;
+      // Once a descriptor is open for append, a failed full-write may already
+      // have placed a prefix on disk; never tell a caller it is safe to retry.
+      writeStarted = true;
+      writeAllSync(fd, line);
       fs.fsyncSync(fd);
     } catch (error) {
       throw explainStoreFsError(error, {
@@ -146,6 +196,6 @@ export function appendRecord(worklogFile, lockFile, record, { now = () => new Da
     }
     return full;
   } finally {
-    releaseLock(lockFile);
+    releaseLock(lockFile, lockToken);
   }
 }

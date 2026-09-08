@@ -14,6 +14,7 @@ import path from "node:path";
 import * as git from "./git.mjs";
 import { registryPath, projectDir, worklogPath, lockPath } from "./paths.mjs";
 import { explainStoreFsError } from "./storage-errors.mjs";
+import { acquireLock, releaseLock, writeFileAtomic } from "./worklog.mjs";
 
 function slug(s) {
   return s.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase().slice(0, 80) || "project";
@@ -50,18 +51,39 @@ export function loadRegistry(home) {
 
 export function saveRegistry(home, registry) {
   const file = registryPath(home);
-  const tmp = `${file}.${process.pid}.tmp`;
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`);
-    fs.renameSync(tmp, file);
+    writeFileAtomic(file, `${JSON.stringify(registry, null, 2)}\n`);
   } catch (error) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
     throw explainStoreFsError(error, {
       operation: "update the project registry",
       target: file,
       effect: "The registry update did not complete; no worklog record was written."
     });
+  }
+}
+
+function mutateRegistry(home, operation) {
+  const file = registryPath(home);
+  const lock = path.join(home, ".projects.lock");
+  let token;
+  try {
+    token = acquireLock(lock);
+  } catch (error) {
+    throw explainStoreFsError(error, {
+      operation: "lock the project registry",
+      target: lock,
+      effect: "No project registry change was written."
+    });
+  }
+  try {
+    // Re-read only after acquiring the global registry lock so two projects
+    // registered concurrently cannot overwrite each other's entries.
+    const registry = loadRegistry(home);
+    const result = operation(registry);
+    saveRegistry(home, registry);
+    return result;
+  } finally {
+    releaseLock(lock, token);
   }
 }
 
@@ -142,17 +164,17 @@ function descriptor(id, entry, home, meta) {
 export function register({ cwd = process.cwd(), home, name = null, autoreg = false }) {
   const ident = identify(cwd);
   if (!ident) throw new Error("not inside a Git repository");
-  const registry = loadRegistry(home);
-  const existing = registry.projects[ident.id] ?? { roots: [] };
-  const entry = {
-    name: name ?? existing.name ?? ident.name,
-    remote: ident.remote ?? existing.remote ?? null,
-    roots: [...new Set([...(existing.roots ?? []), ident.root])],
-    created: existing.created ?? new Date().toISOString()
-  };
-  registry.projects[ident.id] = entry;
-  saveRegistry(home, registry);
-  return { ...descriptor(ident.id, entry, home, { source: autoreg ? "autoregistered" : "registered" }), autoreg };
+  return mutateRegistry(home, (registry) => {
+    const existing = registry.projects[ident.id] ?? { roots: [] };
+    const entry = {
+      name: name ?? existing.name ?? ident.name,
+      remote: ident.remote ?? existing.remote ?? null,
+      roots: [...new Set([...(existing.roots ?? []), ident.root])],
+      created: existing.created ?? new Date().toISOString()
+    };
+    registry.projects[ident.id] = entry;
+    return { ...descriptor(ident.id, entry, home, { source: autoreg ? "autoregistered" : "registered" }), autoreg };
+  });
 }
 
 export function list(home) {
@@ -163,19 +185,19 @@ export function list(home) {
 }
 
 export function rename(home, idOrName, newName) {
-  const registry = loadRegistry(home);
-  const hit = findInRegistry(registry, idOrName);
-  if (!hit) throw new Error(`unknown project: ${idOrName}`);
-  registry.projects[hit.id].name = newName;
-  saveRegistry(home, registry);
-  return hit.id;
+  return mutateRegistry(home, (registry) => {
+    const hit = findInRegistry(registry, idOrName);
+    if (!hit) throw new Error(`unknown project: ${idOrName}`);
+    registry.projects[hit.id].name = newName;
+    return hit.id;
+  });
 }
 
 export function forget(home, idOrName) {
-  const registry = loadRegistry(home);
-  const hit = findInRegistry(registry, idOrName);
-  if (!hit) throw new Error(`unknown project: ${idOrName}`);
-  delete registry.projects[hit.id];
-  saveRegistry(home, registry);
-  return hit.id;
+  return mutateRegistry(home, (registry) => {
+    const hit = findInRegistry(registry, idOrName);
+    if (!hit) throw new Error(`unknown project: ${idOrName}`);
+    delete registry.projects[hit.id];
+    return hit.id;
+  });
 }

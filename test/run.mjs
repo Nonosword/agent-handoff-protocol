@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { canonicalWorkerId, WORKERS } from "../src/worker-detect.mjs";
 import { project, makeSessionId, assertCanOpen, assertCanPromote, assertCanEnd } from "../src/lifecycle.mjs";
-import { REQUIRED, RECORD_TYPES, GATES, END_REASONS } from "../src/validate.mjs";
+import { REQUIRED, RECORD_TYPES, GATES, END_REASONS, validateRecords } from "../src/validate.mjs";
 import { explainStoreFsError } from "../src/storage-errors.mjs";
 import { colors as dashboardColors } from "../src/dashboard.mjs";
 
@@ -326,13 +326,14 @@ test("verify: strict by default, notes never fatal, --lenient downgrades warning
   assert.match(lenient.out, /note: line 2: baton severed/);
   assert.equal(tool(["--strict"]).code, 1, "--strict still accepted");
 
-  // an intent written with no baton held is a warning (fatal by default)
+  // An intent written with no baton is a lifecycle error; lenient mode only
+  // downgrades quality warnings, never a record that violates ownership.
   const wl2 = path.join(dir, "nobaton.jsonl");
   fs.writeFileSync(wl2, JSON.stringify({ type: "intent.open", seq: 1, at: "2026-09-04T00:00:00Z", worker: { id: "codex" }, intentId: "i-x", title: "t", intended: "y" }) + "\n");
   const r2 = sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", wl2]);
   assert.equal(r2.code, 1);
   assert.match(r2.err, /no baton held/);
-  assert.equal(sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", wl2, "--lenient"]).code, 0);
+  assert.equal(sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", wl2, "--lenient"]).code, 1);
 });
 
 test("project B worklog is isolated from A", () => {
@@ -420,6 +421,67 @@ test("compact archives old sessions and keeps recent + open intents", () => {
   const projectDir = path.dirname(ahp(["path"], P).out);
   assert.ok(fs.readdirSync(path.join(projectDir, "archive")).length >= 1);
   assert.equal(ahp(["verify"], P).code, 0);
+});
+
+test("compact keeps the complete origin session of a long-lived open intent", () => {
+  const P = mkrepo("projCompactLongOpen");
+  ahp(["start", "--plan", "open long work", "--gate", "pass", "--evidence", "e"], P);
+  ahp(["intent", "open", "--id", "long-lived", "--title", "long", "--intended", "span sessions"], P);
+  ahp(["end", "--reason", "limit", "--summary", "handoff", "--gate", "pass", "--evidence", "e"], P);
+  for (let i = 0; i < 3; i += 1) {
+    ahp(["start", "--plan", `closed ${i}`, "--gate", "pass", "--evidence", "e"], P);
+    ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "e"], P);
+  }
+  const compact = ahp(["compact", "--keep", "2"], P);
+  assert.equal(compact.code, 0, compact.err);
+  assert.match(compact.out, /no closed session prefix can be safely archived/);
+  const records = ahp(["read", "--json"], P).out.trim().split("\n").map(JSON.parse);
+  assert.equal(records[0].type, "handoff.start", "the open intent's session remains intact");
+  assert.ok(records.some((record) => record.intentId === "long-lived"));
+  assert.equal(ahp(["verify"], P).code, 0);
+  const invalidKeep = ahp(["compact", "--keep", "0"], P);
+  assert.equal(invalidKeep.code, 1);
+  assert.match(invalidKeep.err, /safe integer of at least 1/);
+});
+
+test("compact also retains an open record whose later promotion remains live", () => {
+  const P = mkrepo("projCompactLatePromotion");
+  ahp(["start", "--plan", "open", "--gate", "pass", "--evidence", "e"], P);
+  ahp(["intent", "open", "--id", "cross-session", "--title", "cross", "--intended", "finish later"], P);
+  ahp(["end", "--reason", "limit", "--summary", "handoff", "--gate", "pass", "--evidence", "e"], P);
+  ahp(["start", "--plan", "older closed", "--gate", "pass", "--evidence", "e"], P);
+  ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "e"], P);
+  ahp(["start", "--plan", "promote", "--gate", "pass", "--evidence", "e"], P);
+  ahp(["intent", "promote", "--id", "cross-session", "--commit", commit(P, "late promotion"), "--gate", "pass", "--actual", "finished"], P);
+  ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "e"], P);
+  ahp(["start", "--plan", "newest closed", "--gate", "pass", "--evidence", "e"], P);
+  ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "e"], P);
+  assert.equal(ahp(["compact", "--keep", "2"], P).code, 0);
+  const records = ahp(["read", "--json"], P).out.trim().split("\n").map(JSON.parse);
+  assert.ok(records.some((record) => record.type === "intent.open" && record.intentId === "cross-session"));
+  assert.ok(records.some((record) => record.type === "intent.promote" && record.intentId === "cross-session"));
+  assert.equal(ahp(["verify"], P).code, 0);
+});
+
+test("validator enforces schema types, baton ownership, and every non-pass end", () => {
+  const malformed = validateRecords([{ no: 1, record: {
+    type: "handoff.start", seq: 1, at: "2026-09-08T00:00:00Z", worker: 7,
+    continuesFrom: "not-an-integer", base: "not-an-object", plan: 9
+  } }]);
+  assert.ok(malformed.errors.some((error) => /worker/.test(error)));
+  assert.ok(malformed.errors.some((error) => /continuesFrom/.test(error)));
+  assert.ok(malformed.errors.some((error) => /base must be an object/.test(error)));
+  assert.ok(malformed.errors.some((error) => /plan/.test(error)));
+
+  const state = { commit: "a1", gate: "pass", gateEvidence: "ok", treeClean: true };
+  const invalidLifecycle = validateRecords([
+    { no: 1, record: { type: "handoff.start", seq: 1, at: "2026-09-08T00:00:00Z", worker: "claude", continuesFrom: null, base: state, plan: "p" } },
+    { no: 2, record: { type: "handoff.end", seq: 2, at: "2026-09-08T00:01:00Z", worker: "codex", reason: "blocked", end: { ...state, gate: "fail" }, summary: "failed" } },
+    { no: 3, record: { type: "handoff.start", seq: 3, at: "2026-09-08T00:02:00Z", worker: "codex", continuesFrom: 1, base: state, plan: "q" } },
+    { no: 4, record: { type: "handoff.end", seq: 4, at: "2026-09-08T00:03:00Z", worker: "codex", reason: "task-done", end: state, summary: "done" } }
+  ]);
+  assert.ok(invalidLifecycle.errors.some((error) => /must own the active baton/.test(error)));
+  assert.ok(invalidLifecycle.errors.some((error) => /line 2: handoff.end with a non-pass gate/.test(error)));
 });
 
 test("write commands require a Lane while first start may create it", () => {

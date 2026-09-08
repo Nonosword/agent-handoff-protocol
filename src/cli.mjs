@@ -8,7 +8,7 @@ import * as git from "./git.mjs";
 import * as project from "./project.mjs";
 import * as lanes from "./lanes.mjs";
 import { storeHome } from "./paths.mjs";
-import { readEntries, analyze, appendRecord } from "./worklog.mjs";
+import { readEntries, analyze, appendRecord, acquireLock, releaseLock, writeFileAtomic } from "./worklog.mjs";
 import { validateRecords } from "./validate.mjs";
 import { assertBatonOwner, assertCanOpen, assertCanPromote, assertCanEnd, makeSessionId, currentSessionId, project as projectState } from "./lifecycle.mjs";
 import { renderStatus, renderPickup, renderLog } from "./render.mjs";
@@ -689,30 +689,77 @@ function cmdLane(rest, home) {
 function cmdCompact(rest, home) {
   const { values } = parse(rest, { keep: { type: "string" } });
   const keep = values.keep ? Number(values.keep) : 3;
+  if (!Number.isSafeInteger(keep) || keep < 1) throw new Error("--keep must be a safe integer of at least 1");
   const proj = resolveTarget(values, { registerMissing: true });
-  const entries = readEntries(proj.worklog);
-  if (entries.length === 0) { process.stdout.write("(nothing to compact)\n"); return 0; }
+  let token;
+  try { token = acquireLock(proj.lock); }
+  catch (error) { throw new Error(`could not lock the Lane worklog for compaction: ${error.message}`); }
+  try {
+    // Read and decide under the same Lane lock appendRecord uses. A concurrent
+    // start/intent/promote/end can therefore not be overwritten by a rewrite.
+    const entries = readEntries(proj.worklog);
+    if (entries.length === 0) { process.stdout.write("(nothing to compact)\n"); return 0; }
+    const validation = validateRecords(entries);
+    if (validation.errors.length) throw new Error(`refusing to compact an invalid worklog:\n${validation.errors.join("\n")}`);
 
-  // session boundaries = handoff.start indices
-  const startIdx = entries.map((e, i) => (e.record.type === "handoff.start" ? i : -1)).filter((i) => i >= 0);
-  if (startIdx.length <= keep) { process.stdout.write(`only ${startIdx.length} session(s); keeping all\n`); return 0; }
+    const startIdx = entries.map((e, i) => (e.record.type === "handoff.start" ? i : -1)).filter((i) => i >= 0);
+    if (startIdx.length <= keep) { process.stdout.write(`only ${startIdx.length} session(s); keeping all\n`); return 0; }
 
-  const cutIdx = startIdx[startIdx.length - keep];
-  const promotedIds = new Set(entries.filter((e) => e.record.type === "intent.promote").map((e) => e.record.intentId));
-  // records to KEEP live: everything from cutIdx on, plus any earlier intent.open not yet promoted
-  const keptEarlyOpen = entries.slice(0, cutIdx).filter((e) => e.record.type === "intent.open" && !promotedIds.has(e.record.intentId));
-  const archived = entries.slice(0, cutIdx).filter((e) => !keptEarlyOpen.includes(e));
-  const live = [...keptEarlyOpen, ...entries.slice(cutIdx)];
+    const promotionIndex = new Map();
+    entries.forEach((entry, index) => {
+      if (entry.record.type === "intent.promote") promotionIndex.set(entry.record.intentId, index);
+    });
+    let cutIdx = startIdx[startIdx.length - keep];
+    // An open intent is owned by its originating session. Keep that whole
+    // session whenever the intent is still open *or* its promotion survives in
+    // the live suffix; never leave either an orphaned open or a promotion with
+    // no prior open, even after later sessions.
+    for (let i = 0; i < cutIdx; i += 1) {
+      if (entries[i].record.type !== "intent.open") continue;
+      const promotedAt = promotionIndex.get(entries[i].record.intentId);
+      if (promotedAt !== undefined && promotedAt < cutIdx) continue;
+      const ownerStart = [...startIdx].reverse().find((start) => start <= i);
+      cutIdx = Math.min(cutIdx, ownerStart);
+    }
+    // Never archive a hard-cutoff session. A later start is valid recovery, but
+    // the incomplete predecessor remains live for a human to reconcile.
+    for (const start of startIdx) {
+      if (start >= cutIdx) break;
+      const next = startIdx.find((candidate) => candidate > start) ?? entries.length;
+      if (!entries.slice(start + 1, next).some((entry) => entry.record.type === "handoff.end")) cutIdx = Math.min(cutIdx, start);
+    }
+    if (cutIdx === 0) { process.stdout.write("no closed session prefix can be safely archived\n"); return 0; }
 
-  const first = archived[0].record.seq;
-  const last = archived[archived.length - 1].record.seq;
-  const archDir = path.join(path.dirname(proj.worklog), "archive");
-  fs.mkdirSync(archDir, { recursive: true });
-  const archFile = path.join(archDir, `${first}-${last}.jsonl`);
-  fs.writeFileSync(archFile, archived.map((e) => JSON.stringify(e.record)).join("\n") + "\n");
-  fs.writeFileSync(proj.worklog, live.map((e) => JSON.stringify(e.record)).join("\n") + "\n");
-  process.stdout.write(`archived ${archived.length} record(s) (seq ${first}-${last}) → ${archFile}\nlive worklog: ${live.length} record(s)\n`);
-  return 0;
+    const archived = entries.slice(0, cutIdx);
+    const live = entries.slice(cutIdx);
+    const first = archived[0].record.seq;
+    const last = archived.at(-1).record.seq;
+    const archiveText = archived.map((e) => JSON.stringify(e.record)).join("\n") + "\n";
+    const liveText = live.map((e) => JSON.stringify(e.record)).join("\n") + "\n";
+    const archDir = path.join(path.dirname(proj.worklog), "archive");
+    const archFile = path.join(archDir, `${first}-${last}.jsonl`);
+    if (fs.existsSync(archFile)) {
+      if (fs.readFileSync(archFile, "utf8") !== archiveText) throw new Error(`archive collision at ${archFile}; refusing to overwrite it`);
+    } else {
+      // Publish the archive first: if the next durable replacement fails, the
+      // original live worklog remains intact and a retry is idempotent.
+      writeFileAtomic(archFile, archiveText);
+    }
+    const rewritten = readEntriesText(liveText);
+    const rewrittenValidation = validateRecords(rewritten);
+    if (rewrittenValidation.errors.length) throw new Error(`compaction would produce an invalid live worklog:\n${rewrittenValidation.errors.join("\n")}`);
+    writeFileAtomic(proj.worklog, liveText);
+    process.stdout.write(`archived ${archived.length} record(s) (seq ${first}-${last}) → ${archFile}\nlive worklog: ${live.length} record(s)\n`);
+    return 0;
+  } finally {
+    releaseLock(proj.lock, token);
+  }
+}
+
+function readEntriesText(text) {
+  // The source was parsed already; this narrow adapter keeps the replacement
+  // validation on exactly the JSONL representation that will reach disk.
+  return text.trim() === "" ? [] : text.trim().split("\n").map((line, index) => ({ record: JSON.parse(line), no: index + 1 }));
 }
 
 // --- misc -------------------------------------------------------------
