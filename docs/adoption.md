@@ -56,7 +56,7 @@ branch/worktree.
 ```sh
 ahp dashboard        # every Project/Lane: baton, plan, counts, open intents,
                      # verify, branch and short HEAD
-ahp dashboard -w     # redraws only when state changes (-n S sets the interval)
+ahp dashboard -w     # live countdown; polls state every -n S seconds
 ahp dashboard --json # for scripts; exit 1 if a Lane cannot be read or verified
 ```
 

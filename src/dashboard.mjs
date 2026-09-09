@@ -193,6 +193,13 @@ function sleep(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
+function drawFrame(out, frame) {
+  // Clear before writing, not only after it. This prevents a shorter new frame
+  // from leaving fragments of an older Lane row in terminals with imperfect
+  // alternate-screen erase handling.
+  out.write(`\x1b[H\x1b[2J${frame}\x1b[J`);
+}
+
 export async function dashboard({ home, version = null, json = false, watch = false, interval = 5 } = {}) {
   if (json) {
     process.stdout.write(`${JSON.stringify(toJson(snapshot(home), version, home), null, 2)}\n`);
@@ -208,29 +215,57 @@ export async function dashboard({ home, version = null, json = false, watch = fa
     return result.anyError ? 1 : 0;
   }
 
-  const every = Math.max(1, Number(interval) || 5);
+  const every = Math.max(1, Math.ceil(Number(interval) || 5));
   const out = process.stdout;
+  const input = process.stdin;
   let running = true;
   const stop = () => { running = false; };
+  const onInput = (data) => {
+    // Raw mode prevents touchpad arrow-key escape sequences from echoing into
+    // the dashboard. Honour Ctrl-C ourselves because raw mode disables the
+    // terminal driver's normal SIGINT conversion.
+    if (Buffer.from(data).includes(3)) stop();
+  };
+  const rawInput = input.isTTY && typeof input.setRawMode === "function";
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  if (rawInput) {
+    input.setRawMode(true);
+    input.resume();
+    input.on("data", onInput);
+  }
   out.write("\x1b[?1049h\x1b[?25l");
 
   try {
     let key = fingerprint(home);
-    const first = render(snapshot(home), home, { version, footer: `watching every ${every}s · ctrl-c to exit` });
-    out.write(`\x1b[H${first.text}\x1b[J`);
+    let rows = snapshot(home);
+    let changed = null;
+    let remaining = every;
     while (running) {
-      await sleep(every * 1000);
+      const footer = `${changed ? `updated ${changed} · ` : ""}refresh in ${remaining}s · ctrl-c to exit`;
+      const frame = render(rows, home, { version, footer });
+      drawFrame(out, frame.text);
+      changed = null;
+      await sleep(1000);
       if (!running) break;
+
+      remaining -= 1;
+      if (remaining > 0) continue;
       const next = fingerprint(home);
-      if (next === key) continue;
-      key = next;
-      const frame = render(snapshot(home), home, { version, footer: `changed ${new Date().toTimeString().slice(0, 8)} · watching every ${every}s · ctrl-c to exit` });
-      out.write(`\x1b[H${frame.text}\x1b[J`);
+      if (next !== key) {
+        key = next;
+        rows = snapshot(home);
+        changed = new Date().toTimeString().slice(0, 8);
+      }
+      remaining = every;
     }
   } finally {
     out.write("\x1b[?25h\x1b[?1049l");
+    if (rawInput) {
+      input.removeListener("data", onInput);
+      input.setRawMode(false);
+      input.pause();
+    }
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
   }

@@ -28,7 +28,8 @@ USAGE
 
 READ
   dashboard [-w] [-n S]  every project and Lane: baton + worklog state. Runs from
-                         anywhere. -w polls and redraws only after a change (default 5s).
+                         anywhere. -w shows a live refresh countdown and polls state
+                         every S seconds (default 5s).
                          --json for scripts.
   status                 selected Lane, baton holder, open intents, tree/gate state
   pickup [--full]        compact handoff, commit and open-intent summary; --full expands all

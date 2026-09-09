@@ -649,11 +649,13 @@ test("pickup is compact by default and --full expands omitted commits", () => {
   assert.match(full.out, /unmatched-11/);
 });
 
-test("dashboard watch avoids heavy Git scans and skips unchanged frames", () => {
+test("dashboard watch clears stale frames, consumes terminal input, and bounds polling", () => {
   const source = fs.readFileSync(path.join(REPO, "src", "dashboard.mjs"), "utf8");
   assert.doesNotMatch(source, /logRange|isClean|dirtyPaths/);
-  assert.equal(source.includes("\\x1b[2J"), false);
-  assert.match(source, /if \(next === key\) continue/);
+  assert.match(source, /\\x1b\[H\\x1b\[2J/);
+  assert.match(source, /input\.setRawMode\(true\)/);
+  assert.match(source, /refresh in \$\{remaining\}s/);
+  assert.match(source, /if \(remaining > 0\) continue/);
   assert.match(source, /git\.headView/);
 });
 
