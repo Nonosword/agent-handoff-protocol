@@ -17,6 +17,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: Install locked dependencies
+        run: npm ci
+
       - name: Configure git identity (needed by the test repos)
         run: |
           git config --global user.email ci@example.com
@@ -29,9 +32,7 @@ jobs:
         run: npm run verify:examples
 
       - name: Examples match the JSON Schema
-        run: |
-          npm install --no-save ajv@8 ajv-formats@3
-          npm run schema:check
+        run: npm run schema:check
 
       - name: install.sh dry-run
         run: |

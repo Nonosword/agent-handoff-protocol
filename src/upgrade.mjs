@@ -1,7 +1,7 @@
 // `ahp upgrade` — self-update this checkout, then re-run the installer so every
-// host picks up the new skill / MCP registration. All local: `git` against
-// AHP's own checkout (never a user project) and AHP's own `install.sh`. No
-// network primitive; nothing is sent anywhere (SPEC §11).
+// host picks up the new skill / MCP registration. All local except the explicit
+// user-invoked `ahp upgrade` command's `git fetch`, which may contact this
+// checkout's configured Git remote. It never contacts a user project.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -59,8 +59,7 @@ export async function upgrade({ check = false } = {}) {
 
   if (behind === "0") {
     out(`already current — ${before} (${branch})`);
-    if (!check) refreshHosts(out, err);
-    return 0;
+    return check || refreshHosts(out, err) ? 0 : 1;
   }
   if (check) {
     out(`${behind} commit(s) behind ${upstream.stdout.trim()}. run \`ahp upgrade\` to apply.`);
@@ -77,15 +76,18 @@ export async function upgrade({ check = false } = {}) {
   out(after === before
     ? `updated — ${after} (${head}), ${behind} commit(s) pulled`
     : `updated ${before} → ${after} (${head})`);
-  refreshHosts(out, err);
-  return 0;
+  return refreshHosts(out, err) ? 0 : 1;
 }
 
 function refreshHosts(out, err) {
   const installer = path.join(REPO, "install.sh");
-  if (!fs.existsSync(installer)) { err(`ahp: ${installer} missing — skipped host refresh.`); return; }
+  if (!fs.existsSync(installer)) { err(`ahp: ${installer} missing — skipped host refresh.`); return false; }
   out("");
   const r = spawnSync("bash", [installer, "--mode", "mcp", "--no-color"], { stdio: "inherit" });
-  if (r.status !== 0) err(`ahp: installer exited ${r.status ?? "?"} — check its output above.`);
+  if (r.status !== 0) {
+    err(`ahp: installer exited ${r.status ?? "?"} — check its output above.`);
+    return false;
+  }
   out(RECONNECT.trimEnd());
+  return true;
 }

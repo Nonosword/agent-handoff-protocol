@@ -831,7 +831,7 @@ test("read/log --worker filters to one agent; pickup flags a prior turn", () => 
   assert.match(pk.out, /1 handoff since/);
 });
 
-test("upgrade: --check reports behind/current, refuses a dirty or non-git checkout", () => {
+test("upgrade: only explicit upgrade fetches, and host-refresh failure is non-zero", () => {
   const root = path.join(TMP, "upgrade"); fs.mkdirSync(root, { recursive: true });
   const bare = path.join(root, "remote.git");
   const work = path.join(root, "checkout");
@@ -872,6 +872,15 @@ test("upgrade: --check reports behind/current, refuses a dirty or non-git checko
   assert.match(r.stdout, /new MCP tool or parameter/);
   assert.match(r.stdout, /\/mcp .*Reconnect/);
 
+  // A successful Git update is not a successful upgrade if host registration
+  // fails; the caller must receive a non-zero status and actionable stderr.
+  fs.writeFileSync(path.join(work, "install.sh"), "#!/bin/sh\necho refresh failed >&2\nexit 7\n");
+  fs.chmodSync(path.join(work, "install.sh"), 0o755);
+  g("add", "install.sh"); g("commit", "-qm", "make refresh fail");
+  r = up([]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /installer exited 7/);
+
   // dirty tree → refuse
   fs.writeFileSync(path.join(work, "dirt"), "x");
   sh("git", ["-C", work, "add", "dirt"]);
@@ -886,15 +895,18 @@ test("upgrade: --check reports behind/current, refuses a dirty or non-git checko
   assert.match(r.stderr, /not a git checkout/);
 });
 
-test("nothing in src/ can reach the network (SPEC §11)", () => {
+test("only explicit ahp upgrade may fetch a configured Git remote", () => {
   const dir = path.join(REPO, "src");
   const banned = /\b(node:https?|node:net|node:dns|node:tls|node:dgram|require\(["']https?["']\)|fetch\s*\(|new\s+WebSocket|import\s+https?\s+from|from\s+["']node:(https?|net|dns|tls|dgram)["'])/;
   for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".mjs"))) {
     const src = fs.readFileSync(path.join(dir, f), "utf8");
     assert.ok(!banned.test(src), `${f} references a network primitive`);
   }
-  // the only child_process users, and only for local commands (git / ps / the
-  // bundled install.sh — never a network client)
+  // Upgrade alone may tell Git to contact its configured remote, and only after
+  // an explicit user `ahp upgrade` invocation. The other subprocess users are
+  // local CLI, process inspection, or repository inspection paths.
+  const upgrade = fs.readFileSync(path.join(dir, "upgrade.mjs"), "utf8");
+  assert.match(upgrade, /git\("fetch", "--quiet"\)/);
   const users = fs.readdirSync(dir).filter((n) => n.endsWith(".mjs"))
     .filter((n) => /child_process/.test(fs.readFileSync(path.join(dir, n), "utf8")));
   assert.deepEqual(users.sort(), ["git.mjs", "mcp.mjs", "upgrade.mjs", "worker-detect.mjs"]);

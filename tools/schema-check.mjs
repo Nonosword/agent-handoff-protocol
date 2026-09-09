@@ -5,8 +5,7 @@
 // It exists so CI can prove the JSON Schema and the examples stay in agreement,
 // and so downstream tooling in other languages has a trusted reference result.
 //
-//   npm install --no-save ajv@8 ajv-formats@3
-//   node tools/schema-check.mjs examples/*.jsonl
+//   npm run schema:check
 //
 // Exit 0 if every line of every file validates, 1 otherwise, 2 on usage error.
 
@@ -30,7 +29,7 @@ try {
   const formatsMod = await import("ajv-formats");
   addFormats = formatsMod.default ?? formatsMod;
 } catch {
-  process.stderr.write("schema-check needs ajv: npm install --no-save ajv@8 ajv-formats@3\n");
+  process.stderr.write("schema-check needs declared development dependencies; run npm install or npm ci\n");
   process.exit(2);
 }
 
