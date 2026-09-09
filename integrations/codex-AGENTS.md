@@ -20,8 +20,9 @@ diagnosis, follow its permission/mount/sandbox guidance, then retry. Do not
 silently switch to an in-repo worklog or proceed from memory.
 
 Identify yourself so records aren't attributed to "unknown": via MCP this is
-automatic; via the CLI, `export AHP_WORKER_ID=codex AHP_MODEL=codex
-AHP_RUNTIME=codex-cli` once, or pass `--worker-id/--model/--runtime` on `ahp start`.
+automatic; for the CLI, `install.sh` wires `AHP_WORKER_ID` into Codex's shell
+environment. If a record still lands wrong, pass `--worker-id codex --model
+codex --runtime codex` on `ahp start` — later records in the session inherit it.
 
 Resolve the Lane before the first change. Run `ahp lane list` when more than one
 exists. If the task clearly matches an id/title/description/scope/alias, select

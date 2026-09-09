@@ -65,14 +65,19 @@ reads the store, so it works from anywhere and covers all projects at once.
 
 ## Worker identity
 
-Set once in the agent's environment so every record is attributed:
+Every record is attributed to a worker. `install.sh` wires this per host: the
+MCP entry carries `AHP_WORKER_ID` for the tool path, and — for Claude Code and
+Codex — the same id goes into the host's own shell environment
+(`~/.claude/settings.json` `env`; Codex `[shell_environment_policy.set]`), so a
+plain `ahp` CLI call is attributed the same way instead of guessing from the
+process tree.
 
-```sh
-export AHP_WORKER_ID=claude AHP_MODEL=claude AHP_RUNTIME=claude-code
-```
-
-Otherwise pass `--worker-id/--model/--runtime` on `ahp start`, or the identity is
-inherited from the last `handoff.start`.
+For a harness the installer does not cover, pass `--worker-id/--model/--runtime`
+on `ahp start` (later records in the session inherit it). You *can* export
+`AHP_WORKER_ID` / `AHP_MODEL` / `AHP_RUNTIME` instead, but a shell export
+applies to **every** agent that shell launches — two agents sharing one rc file
+would then write under one identity — so prefer the per-host config or the
+flags.
 
 ## Staying current
 

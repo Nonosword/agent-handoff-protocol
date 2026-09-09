@@ -13,6 +13,10 @@ independent Lane worklogs in a central store keyed by the repo's Git identity.
 If `ahp_*` MCP tools are available, prefer them over the `ahp` shell commands
 (structured args, no quoting of the free-text fields). `ahp <verb>` ↔ `ahp_<verb>`.
 
+Pass `--worker-id <id> --model <id> --runtime <id>` on `ahp start` so records
+are attributed (the MCP tools and a covered CLI host do this automatically);
+later records in the session inherit it.
+
 A required AHP action counts only after explicit success (CLI exit 0; MCP result
 not marked as an error). If `pickup` or `start` fails, leave code, docs and
 Git unchanged. Preserve the exact error, do only read-only diagnosis, follow its

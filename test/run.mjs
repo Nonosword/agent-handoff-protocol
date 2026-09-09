@@ -280,6 +280,80 @@ test("installer registers Claude Desktop independently from the Claude Code CLI"
   assert.deepEqual(JSON.parse(fs.readFileSync(config, "utf8")), original, "Claude Desktop uninstall leaves unrelated JSON untouched");
 });
 
+test("installer wires worker identity into the Claude Code and Codex shell environments", () => {
+  const root = path.join(TMP, "installer-identity");
+  const home = path.join(root, "home");
+  const settings = path.join(home, ".claude", "settings.json");
+  const toml = path.join(home, ".codex", "config.toml");
+  fs.mkdirSync(path.dirname(settings), { recursive: true });
+  fs.mkdirSync(path.dirname(toml), { recursive: true });
+  fs.writeFileSync(settings, JSON.stringify({ theme: "dark", env: { FOO: "bar" } }, null, 2) + "\n");
+  const tomlSeed = 'model = "x"\n\n[shell_environment_policy.set]\nNODE_REPL_TRUSTED = "abc"\n\n[mcp_servers.other]\ncommand = "y"\n';
+  fs.writeFileSync(toml, tomlSeed);
+  const env = {
+    ...ENV,
+    HOME: home,
+    PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    AHP_BIN_DIR: path.join(root, "bin"),
+    AHP_HOME: path.join(root, "store"),
+    QODER_APP: path.join(root, "no.app"), QODER_CONFIG: path.join(home, ".qoder"),
+    QODER_CN_APP: path.join(root, "no.app"), QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+  };
+  const run = (...a) => spawnSync("bash", [path.join(REPO, "install.sh"), ...a, "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+
+  const install = run("--mode", "cli");
+  assert.equal(install.status, 0, install.stdout + install.stderr);
+
+  const merged = JSON.parse(fs.readFileSync(settings, "utf8"));
+  assert.equal(merged.theme, "dark", "unrelated settings keys survive");
+  assert.equal(merged.env.FOO, "bar", "unrelated env vars survive");
+  assert.equal(merged.env.AHP_WORKER_ID, "claude");
+  assert.equal(merged.env.AHP_MODEL, "claude");
+  assert.equal(merged.env.AHP_RUNTIME, "claude-code");
+
+  const tomlAfter = fs.readFileSync(toml, "utf8");
+  assert.match(tomlAfter, /\[shell_environment_policy\.set\]\nAHP_WORKER_ID = "codex"\nAHP_MODEL = "codex"\nAHP_RUNTIME = "codex"\nNODE_REPL_TRUSTED = "abc"/);
+  assert.match(tomlAfter, /\[mcp_servers\.other\]\ncommand = "y"/, "the rest of the TOML file is preserved");
+  assert.equal(fs.existsSync(`${toml}.ahp.bak`), true, "the pre-edit config is backed up once");
+
+  const reRun = run("--mode", "cli");
+  assert.equal(reRun.status, 0, reRun.stdout + reRun.stderr);
+  assert.match(reRun.stdout, /Claude Code worker identity\s+current/);
+  assert.match(reRun.stdout, /Codex worker identity\s+current/);
+  assert.equal(fs.readFileSync(toml, "utf8"), tomlAfter, "a second run rewrites nothing");
+
+  const uninstall = run("--uninstall");
+  assert.equal(uninstall.status, 0, uninstall.stdout + uninstall.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settings, "utf8")), { theme: "dark", env: { FOO: "bar" } }, "uninstall removes only the identity keys");
+  assert.equal(fs.readFileSync(toml, "utf8"), tomlSeed, "uninstall restores the TOML byte-for-byte");
+});
+
+test("installer appends a Codex shell-env table when absent and defers an inline one", () => {
+  const root = path.join(TMP, "installer-identity-toml");
+  const mk = (name, seed) => {
+    const home = path.join(root, name);
+    fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".codex", "config.toml"), seed);
+    const env = {
+      ...ENV, HOME: home, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      AHP_BIN_DIR: path.join(root, name, "bin"), AHP_HOME: path.join(root, name, "store"),
+      QODER_APP: path.join(root, "no.app"), QODER_CONFIG: path.join(home, ".qoder"),
+      QODER_CN_APP: path.join(root, "no.app"), QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+    };
+    const r = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "cli", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return { r, toml: fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8") };
+  };
+
+  const none = mk("none", 'model = "x"\n');
+  assert.match(none.toml, /model = "x"\n\n\[shell_environment_policy\.set\]\nAHP_WORKER_ID = "codex"\nAHP_MODEL = "codex"\nAHP_RUNTIME = "codex"\n$/);
+
+  const inlineSeed = 'model = "x"\n\n[shell_environment_policy]\nset = { FOO = "bar" }\n';
+  const inline = mk("inline", inlineSeed);
+  assert.equal(inline.toml, inlineSeed, "an inline set table is never edited by surgery");
+  assert.match(inline.r.stdout, /inline shell env/);
+});
+
 test("verify passes for the produced worklog", () => {
   const r = ahp(["verify"], A);
   assert.equal(r.code, 0, r.err);

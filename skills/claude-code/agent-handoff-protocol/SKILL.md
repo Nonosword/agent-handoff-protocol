@@ -130,12 +130,15 @@ it is required if `--gate` is not `pass`.
 
 ## Worker identity
 
-Records must be attributed, not left as `unknown`. Via the MCP tools this is
-automatic (from the host handshake). Via the CLI, either export once —
+Records must be attributed, not left as `unknown`.
 
-```
-export AHP_WORKER_ID=claude AHP_MODEL=claude AHP_RUNTIME=claude-code
-```
+- **MCP tools** — automatic, from the host handshake.
+- **CLI** — `install.sh` wires `AHP_WORKER_ID` into this host's own shell
+  environment, so a plain `ahp` call is attributed the same way. If a record
+  still lands as `unknown` or as the wrong agent, pass
+  `--worker-id <id> --model <id> --runtime <id>` on `ahp start` — later records
+  in the session inherit it.
 
-— or pass `--worker-id claude --model claude --runtime claude-code` on your
-`ahp start`. Later records in the session inherit it.
+Set the `AHP_WORKER_ID` / `AHP_MODEL` / `AHP_RUNTIME` environment variables by
+hand only for a harness the installer does not cover; a shell export applies to
+**every** agent that shell launches, so prefer the flags.

@@ -9,6 +9,12 @@ The skill / `AGENTS.md` snippet tell agents to prefer these tools when present.
 **Qoder** and **Qoder CN are separate products**: detection reports each one
 independently and never folds CN into the Qoder result.
 
+Each registration carries `AHP_WORKER_ID` / `AHP_MODEL` / `AHP_RUNTIME` in its
+`env` so tool-written records are attributed. For the *shell* path the installer
+also wires the same id into Claude Code's `settings.json` `env` and Codex's
+`[shell_environment_policy.set]`, so a plain `ahp` CLI call an agent runs is
+attributed the same way rather than guessed from the process tree.
+
 ```sh
 # Qoder: its global CLI supports MCP subcommands.
 qoder mcp add agent-handoff -s user -- node <REPO>/bin/ahp-mcp

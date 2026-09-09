@@ -31,6 +31,14 @@ CLAUDE_SKILL_DIR="$HOME/.claude/skills/agent-handoff-protocol"
 CLAUDE_DESKTOP_MCP="${CLAUDE_DESKTOP_MCP:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
 CLAUDE_DESKTOP_APP="${CLAUDE_DESKTOP_APP:-/Applications/Claude.app}"
 CODEX_AGENTS="$HOME/.codex/AGENTS.md"
+# Worker identity for the *shell* path: the MCP env blocks below attribute
+# tool calls, but a bare `ahp` CLI call an agent runs in a shell has no such
+# hint and would fall back to process-tree guessing. Wire the identity into
+# each host's own shell environment so CLI-written and MCP-written records
+# agree. Claude Code injects settings.json `env` into its Bash tool; Codex
+# applies [shell_environment_policy.set] to every command it runs.
+CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+CODEX_CONFIG_TOML="${CODEX_CONFIG_TOML:-$HOME/.codex/config.toml}"
 # JSON-config hosts: each owns a dedicated MCP-only file (never a shared
 # settings file), so a safe merge-in-place is possible (see json_mcp_register).
 CURSOR_MCP="$HOME/.cursor/mcp.json"
@@ -344,6 +352,162 @@ json_mcp_unregister() {
   esac
 }
 
+# ---- worker identity for the shell path -------------------------------
+# The MCP env blocks attribute tool calls. A bare `ahp` CLI call an agent runs
+# in a shell has no such hint, so wire AHP_WORKER_ID / _MODEL / _RUNTIME into
+# the host's own shell environment too. Idempotent; touches only these keys.
+
+# Claude Code: settings.json `env` is injected into every Bash-tool shell. The
+# locked parse-merge from json_mcp_op already sets exactly one leaf at a time
+# without disturbing siblings, so reuse it — env vars are just string leaves
+# under the `env` object.
+identity_json() {          # host file id model runtime
+  local host="$1" file="$2" changed=0 r k
+  if [ "$DRY" = 1 ]; then dry "wire worker identity for $host" "$file"; return 0; fi
+  mkdir -p "$(dirname "$file")"
+  set -- "AHP_WORKER_ID=$3" "AHP_MODEL=$4" "AHP_RUNTIME=$5"
+  for kv in "$@"; do
+    k="${kv%%=*}"
+    r=$(json_mcp_op set "$file" env "$k" "\"${kv#*=}\"" 2>&1) || r="error: $r"
+    case "$r" in
+      added|updated) changed=1 ;;
+      unchanged) : ;;
+      parse_error) warn "$host settings not valid JSON" "$file — set $k by hand"; return 1 ;;
+      *) bad "$host identity wiring failed" "$r"; return 1 ;;
+    esac
+  done
+  [ "$changed" = 1 ] && ok "wired worker identity" "$file — restart $host to load it" \
+                     || skip "$host worker identity" "current"
+}
+
+identity_json_remove() {  # host file
+  local host="$1" file="$2" any=0 r k
+  [ -f "$file" ] || { skip "no worker identity" "$host"; return 0; }
+  if [ "$DRY" = 1 ]; then dry "remove worker identity" "$file"; return 0; fi
+  for k in AHP_WORKER_ID AHP_MODEL AHP_RUNTIME; do
+    r=$(json_mcp_op delete "$file" env "$k" 2>&1) || r="error: $r"
+    case "$r" in removed) any=1 ;; absent) : ;;
+      parse_error) warn "$host settings not valid JSON" "$file — left as-is"; return 0 ;;
+    esac
+  done
+  [ "$any" = 1 ] && ok "removed worker identity" "$file" || skip "no worker identity" "$host"
+}
+
+# Codex: [shell_environment_policy.set] forces vars into every shell command it
+# runs. No `codex config` CLI writes persistent config and there is no
+# zero-dependency TOML parser, so edit the file with line-scoped surgery: only
+# lines inside that one table are ever touched, everything else is preserved
+# byte-for-byte, and a pre-existing file is copied to <file>.ahp.bak first.
+toml_shellenv_op() {      # set|delete file KEY=VAL...
+  node - "$@" <<'NODE'
+const fs = require("fs");
+const [op, file, ...pairs] = process.argv.slice(2);
+const want = pairs.map((p) => { const i = p.indexOf("="); return [p.slice(0, i), p.slice(i + 1)]; });
+
+let text = "";
+try { text = fs.readFileSync(file, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; }
+const nl = text.includes("\r\n") ? "\r\n" : "\n";
+let lines = text.length ? text.split(/\r?\n/) : [];
+const headerRe = /^\s*\[\s*([^\]]+?)\s*\]\s*$/;
+// normalise a header so `["shell_environment_policy"."set"]` and the bare form
+// compare equal — `codex mcp add` writes the bare form but a hand-edit may not.
+const norm = (t) => t.replace(/"([^"]*)"/g, "$1").replace(/\s+/g, "");
+const table = (i) => { const m = lines[i].match(headerRe); return m ? norm(m[1]) : null; };
+const keyLineRe = (k) => new RegExp('^(\\s*)' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s*=\\s*)"([^"]*)"(\\s*)$');
+
+// An inline `set = { ... }` under [shell_environment_policy] is a shape this
+// surgery will not touch — report it so the installer prints a manual snippet.
+for (let i = 0; i < lines.length; i++) {
+  if (table(i) === "shell_environment_policy") {
+    for (let j = i + 1; j < lines.length && !headerRe.test(lines[j]); j++) {
+      if (/^\s*set\s*=/.test(lines[j])) { console.log("manual"); process.exit(0); }
+    }
+  }
+}
+
+let start = -1;
+for (let i = 0; i < lines.length; i++) if (table(i) === "shell_environment_policy.set") start = i;
+let end = lines.length;
+if (start !== -1) for (let i = start + 1; i < lines.length; i++) if (headerRe.test(lines[i])) { end = i; break; }
+
+let changed = false;
+if (op === "delete") {
+  if (start === -1) { console.log("absent"); process.exit(0); }
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i > start && i < end) {
+      const hit = want.find(([k, v]) => { const m = lines[i].match(keyLineRe(k)); return m && m[3] === v; });
+      if (hit) { changed = true; continue; }
+    }
+    kept.push(lines[i]);
+  }
+  lines = kept;
+} else {
+  const add = [];
+  for (const [k, v] of want) {
+    let found = false;
+    for (let i = start + 1; i < end; i++) {
+      const m = start !== -1 && lines[i] ? lines[i].match(keyLineRe(k)) : null;
+      if (m) { found = true; if (m[3] !== v) { lines[i] = `${m[1]}${k}${m[2]}"${v}"${m[4]}`; changed = true; } break; }
+    }
+    if (!found) add.push(`${k} = "${v}"`);
+  }
+  if (add.length) {
+    changed = true;
+    if (start === -1) {
+      while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+      if (lines.length) lines.push("");
+      lines.push("[shell_environment_policy.set]", ...add);
+    } else {
+      lines.splice(start + 1, 0, ...add);
+    }
+  }
+}
+
+if (!changed) { console.log("unchanged"); process.exit(0); }
+let out = lines.join(nl);
+if (text.endsWith("\n") && !out.endsWith(nl)) out += nl;
+if (text.length) { try { fs.copyFileSync(file, file + ".ahp.bak"); } catch { /* best effort */ } }
+const tmp = file + ".ahp." + process.pid + ".tmp";
+fs.mkdirSync(require("path").dirname(file), { recursive: true });
+fs.writeFileSync(tmp, out, { mode: 0o600 });
+fs.renameSync(tmp, file);
+console.log(op === "delete" ? "removed" : "wired");
+NODE
+}
+
+identity_toml() {         # host file id model runtime
+  local host="$1" file="$2" r
+  if [ "$DRY" = 1 ]; then dry "wire worker identity for $host" "$file"; return 0; fi
+  r=$(toml_shellenv_op set "$file" "AHP_WORKER_ID=$3" "AHP_MODEL=$4" "AHP_RUNTIME=$5" 2>&1) || r="error: $r"
+  case "$r" in
+    wired)     ok "wired worker identity" "$file — restart $host to load it" ;;
+    unchanged) skip "$host worker identity" "current" ;;
+    manual)    warn "$host config uses an inline shell env" "add to [shell_environment_policy.set] by hand:"
+               snippet <<EOF
+[shell_environment_policy.set]
+AHP_WORKER_ID = "$3"
+AHP_MODEL = "$4"
+AHP_RUNTIME = "$5"
+EOF
+               ;;
+    *) bad "$host identity wiring failed" "$r" ;;
+  esac
+}
+
+identity_toml_remove() {  # host file id model runtime
+  local host="$1" file="$2" r
+  [ -f "$file" ] || { skip "no worker identity" "$host"; return 0; }
+  if [ "$DRY" = 1 ]; then dry "remove worker identity" "$file"; return 0; fi
+  r=$(toml_shellenv_op delete "$file" "AHP_WORKER_ID=$3" "AHP_MODEL=$4" "AHP_RUNTIME=$5" 2>&1) || r="error: $r"
+  case "$r" in
+    removed)        rm -f "$file.ahp.bak"; ok "removed worker identity" "$file" ;;
+    absent|unchanged) skip "no worker identity" "$host" ;;
+    manual)         skip "$host worker identity" "inline — left as-is" ;;
+    *) bad "$host identity removal failed" "$r" ;;
+  esac
+}
+
 # ---------------------------------------------------------------- uninstall
 if [ "$UNINSTALL" = 1 ]; then
   banner
@@ -392,6 +556,11 @@ if [ "$UNINSTALL" = 1 ]; then
   json_mcp_unregister "Cursor" "$CURSOR_MCP" mcpServers
   json_mcp_unregister "VS Code" "$VSCODE_MCP" servers
   json_mcp_unregister "Windsurf" "$WINDSURF_MCP" mcpServers
+
+  section "Worker identity"
+  identity_json_remove "Claude Code" "$CLAUDE_SETTINGS"
+  identity_toml_remove "Codex" "$CODEX_CONFIG_TOML" codex codex codex
+
   printf '\n  %sThe store at %s was left intact.%s\n\n' "$DIM" "$STORE" "$R"
   exit 0
 fi
@@ -549,6 +718,29 @@ install_procedure() {
   else skip "Codex" "no ~/.codex — skipped"; fi
 }
 
+# ---- worker identity (both modes) ------------------------------------
+# Attribute a bare `ahp` CLI call the same way the MCP path is attributed, by
+# writing the identity into the host's own shell environment. Runs in cli and
+# mcp mode alike — the CLI path is exactly what this protects.
+install_identity() {
+  section "Worker identity"
+  if [ "$HAS_CLAUDE" = 1 ] || [ -d "$HOME/.claude" ]; then
+    identity_json "Claude Code" "$CLAUDE_SETTINGS" claude claude claude-code
+  else skip "Claude Code identity" "no ~/.claude"; fi
+
+  if [ "$HAS_CODEX" = 1 ] || [ -d "$HOME/.codex" ]; then
+    identity_toml "Codex" "$CODEX_CONFIG_TOML" codex codex codex
+  else skip "Codex identity" "no ~/.codex"; fi
+
+  # Qoder / Qoder CN take their identity from the MCP initialize handshake
+  # (clientInfo.name → canonical id) and expose no stable shell-env target,
+  # so nothing is wired for the shell path — install_mcp still forces the id
+  # on their MCP entry as a belt-and-braces default.
+  if [ "$HAS_QODER" = 1 ] || [ "$HAS_QODER_CN" = 1 ]; then
+    skip "Qoder identity" "resolved from the MCP handshake"
+  fi
+}
+
 # ---- mcp mode ----------------------------------------------------------
 # Register with each host's own MCP CLI, or — if already registered — verify the
 # entry still points at this repo and carries the worker-identity env, and
@@ -590,17 +782,25 @@ register_host() {
        return 0 ;;
   esac
 
-  if printf '%s' "$info" | grep -q "$REPO/bin/ahp-mcp"; then
-    skip "$host MCP entry" "current — code updates via git pull; restart $host to load"
-  else
+  local want_env=0
+  case " ${addargs[*]} " in *" AHP_WORKER_ID="*) want_env=1 ;; esac
+  if ! printf '%s' "$info" | grep -q "$REPO/bin/ahp-mcp"; then
     warn "$host MCP entry" "points elsewhere — refreshing"
     "$cli" mcp remove agent-handoff >/dev/null 2>&1 || "$cli" mcp remove agent-handoff -s user >/dev/null 2>&1
     _add
+  elif [ "$want_env" = 1 ] && ! printf '%s' "$info" | grep -q "AHP_WORKER_ID"; then
+    warn "$host MCP entry" "missing worker-identity env — refreshing"
+    "$cli" mcp remove agent-handoff >/dev/null 2>&1 || "$cli" mcp remove agent-handoff -s user >/dev/null 2>&1
+    _add
+  else
+    skip "$host MCP entry" "current — code updates via git pull; restart $host to load"
   fi
 }
 
 # Qoder's global CLI exposes mcp add/list/remove. It is intentionally separate
-# from Qoder CN, whose CLI only accepts --add-mcp <JSON>.
+# from Qoder CN, whose CLI only accepts --add-mcp <JSON>. Qoder's own identity
+# still reaches the CLI through the MCP initialize handshake; the -e flags below
+# are a best-effort default and are dropped if this CLI does not accept them.
 register_qoder() {
   [ -n "$QODER_CLI" ] || return 1
   if [ "$DRY" = 1 ]; then dry "register with Qoder" "$QODER_CLI mcp add … agent-handoff -- node …/ahp-mcp"; return 0; fi
@@ -609,7 +809,10 @@ register_qoder() {
     return 0
   fi
   local out
-  if out=$("$QODER_CLI" mcp add agent-handoff -s user -- node "$REPO/bin/ahp-mcp" 2>&1); then
+  if out=$("$QODER_CLI" mcp add agent-handoff -s user \
+             -e AHP_WORKER_ID=qoder -e AHP_MODEL=qoder -e AHP_RUNTIME=qoder \
+             -- node "$REPO/bin/ahp-mcp" 2>&1) \
+     || out=$("$QODER_CLI" mcp add agent-handoff -s user -- node "$REPO/bin/ahp-mcp" 2>&1); then
     ok "registered with Qoder" "restart Qoder to load it"
   else
     bad "Qoder mcp add failed" "$(printf '%s' "$out" | grep -v '^[[:space:]]*$' | head -1)"
@@ -619,13 +822,13 @@ register_qoder() {
 
 qoder_cn_entry_current() {
   [ -f "$QODER_CN_MCP" ] || return 1
-  node -e 'try { const fs = require("fs"); const doc = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const entry = doc.mcpServers?.["agent-handoff"]; process.exit(entry?.command === "node" && entry?.args?.[0] === process.argv[2] ? 0 : 1); } catch { process.exit(1); }' "$QODER_CN_MCP" "$REPO/bin/ahp-mcp"
+  node -e 'try { const fs = require("fs"); const doc = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const entry = doc.mcpServers?.["agent-handoff"]; process.exit(entry?.command === "node" && entry?.args?.[0] === process.argv[2] && entry?.env?.AHP_WORKER_ID === "qoder" ? 0 : 1); } catch { process.exit(1); }' "$QODER_CN_MCP" "$REPO/bin/ahp-mcp"
 }
 
 register_qoder_cn() {
   [ -n "$QODER_CN_CLI" ] || return 1
   local entry out
-  entry=$(printf '{"name":"agent-handoff","command":"node","args":["%s/bin/ahp-mcp"]}' "$REPO")
+  entry=$(printf '{"name":"agent-handoff","command":"node","args":["%s/bin/ahp-mcp"],"env":{"AHP_WORKER_ID":"qoder","AHP_MODEL":"qoder","AHP_RUNTIME":"qoder"}}' "$REPO")
   if [ "$DRY" = 1 ]; then dry "register with Qoder CN" "$QODER_CN_CLI --add-mcp <JSON>"; return 0; fi
   if qoder_cn_entry_current; then
     skip "Qoder CN MCP entry" "already registered — restart Qoder CN to load code updates"
@@ -718,6 +921,7 @@ case "$MODE" in
   cli|mcp) install_procedure ;;
   *) printf '\n  %sunknown --mode: %s (cli | mcp)%s\n\n' "$ERRC" "$MODE" "$R"; exit 2 ;;
 esac
+install_identity
 [ "$MODE" = mcp ] && install_mcp
 
 # ---- self-test + summary ---------------------------------------------
