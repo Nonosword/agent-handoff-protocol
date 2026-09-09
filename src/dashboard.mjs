@@ -193,11 +193,33 @@ function sleep(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-function drawFrame(out, frame) {
-  // Clear before writing, not only after it. This prevents a shorter new frame
-  // from leaving fragments of an older Lane row in terminals with imperfect
-  // alternate-screen erase handling.
-  out.write(`\x1b[H\x1b[2J${frame}\x1b[J`);
+function frameLines(frame) {
+  const lines = frame.split("\n");
+  // `render` terminates a frame with a newline. That terminator is not a
+  // visible row, so excluding it keeps cursor coordinates stable.
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+export function drawFrame(out, frame, previous = null) {
+  const lines = frameLines(frame);
+  if (previous === null) {
+    // The first paint owns a fresh alternate screen, so clearing it once is
+    // both safe and useful. Subsequent paints must not clear the whole screen:
+    // a one-second countdown should touch only its footer row.
+    out.write(`\x1b[H\x1b[2J${frame}`);
+    return lines;
+  }
+
+  const rowCount = Math.max(lines.length, previous.length);
+  for (let index = 0; index < rowCount; index += 1) {
+    if (lines[index] === previous[index]) continue;
+    // Move directly to a changed row, erase that row completely, then draw its
+    // replacement. Erasing also removes stale suffixes when a dynamic value
+    // becomes shorter (for example, "updated HH:MM:SS" disappearing).
+    out.write(`\x1b[${index + 1};1H\x1b[2K${lines[index] ?? ""}`);
+  }
+  return lines;
 }
 
 export async function dashboard({ home, version = null, json = false, watch = false, interval = 5 } = {}) {
@@ -241,10 +263,11 @@ export async function dashboard({ home, version = null, json = false, watch = fa
     let rows = snapshot(home);
     let changed = null;
     let remaining = every;
+    let previousFrame = null;
     while (running) {
       const footer = `${changed ? `updated ${changed} · ` : ""}refresh in ${remaining}s · ctrl-c to exit`;
       const frame = render(rows, home, { version, footer });
-      drawFrame(out, frame.text);
+      previousFrame = drawFrame(out, frame.text, previousFrame);
       changed = null;
       await sleep(1000);
       if (!running) break;

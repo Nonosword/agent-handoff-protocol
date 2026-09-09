@@ -12,7 +12,7 @@ import { canonicalWorkerId, WORKERS } from "../src/worker-detect.mjs";
 import { project, makeSessionId, assertCanOpen, assertCanPromote, assertCanEnd } from "../src/lifecycle.mjs";
 import { REQUIRED, RECORD_TYPES, GATES, END_REASONS, validateRecords } from "../src/validate.mjs";
 import { explainStoreFsError } from "../src/storage-errors.mjs";
-import { colors as dashboardColors } from "../src/dashboard.mjs";
+import { colors as dashboardColors, drawFrame } from "../src/dashboard.mjs";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const AHP = path.join(REPO, "bin", "ahp");
@@ -649,14 +649,35 @@ test("pickup is compact by default and --full expands omitted commits", () => {
   assert.match(full.out, /unmatched-11/);
 });
 
-test("dashboard watch clears stale frames, consumes terminal input, and bounds polling", () => {
+test("dashboard watch redraws only changed rows, consumes terminal input, and bounds polling", () => {
   const source = fs.readFileSync(path.join(REPO, "src", "dashboard.mjs"), "utf8");
   assert.doesNotMatch(source, /logRange|isClean|dirtyPaths/);
   assert.match(source, /\\x1b\[H\\x1b\[2J/);
+  assert.match(source, /lines\[index\] === previous\[index\]/);
+  assert.match(source, /\\x1b\[\$\{index \+ 1\};1H\\x1b\[2K/);
   assert.match(source, /input\.setRawMode\(true\)/);
   assert.match(source, /refresh in \$\{remaining\}s/);
   assert.match(source, /if \(remaining > 0\) continue/);
   assert.match(source, /git\.headView/);
+
+  const writes = [];
+  const out = { write: (value) => writes.push(value) };
+  const first = drawFrame(out, "one\ntwo\n");
+  assert.deepEqual(first, ["one", "two"]);
+  assert.deepEqual(writes, ["\x1b[H\x1b[2Jone\ntwo\n"]);
+
+  writes.length = 0;
+  const unchanged = drawFrame(out, "one\ntwo\n", first);
+  assert.deepEqual(unchanged, first);
+  assert.deepEqual(writes, []);
+
+  writes.length = 0;
+  drawFrame(out, "one\nthree\n", first);
+  assert.deepEqual(writes, ["\x1b[2;1H\x1b[2Kthree"]);
+
+  writes.length = 0;
+  drawFrame(out, "one\n", first);
+  assert.deepEqual(writes, ["\x1b[2;1H\x1b[2K"]);
 });
 
 test("MCP Lane tools create, list, and edit the same project metadata", () => {
