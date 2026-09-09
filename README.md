@@ -143,7 +143,7 @@ From **anywhere** — every project at a glance:
 ```sh
 ahp dashboard       # every Project/Lane: baton, plan, open intents, verify,
                     # plus branch and short HEAD (no working-tree/log scan)
-ahp dashboard -w    # live refresh countdown; polls state every 5s; ctrl-c to exit
+ahp dashboard -w    # redraw immediately when local AHP state changes; ctrl-c to exit
 ahp dashboard --json
 ```
 

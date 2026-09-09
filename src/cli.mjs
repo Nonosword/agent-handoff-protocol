@@ -27,9 +27,9 @@ USAGE
   ahp <command> [options]
 
 READ
-  dashboard [-w] [-n S]  every project and Lane: baton + worklog state. Runs from
-                         anywhere. -w shows a live refresh countdown and polls state
-                         every S seconds (default 5s).
+  dashboard [-w]         every project and Lane: baton + worklog state. Runs from
+                         anywhere. -w redraws immediately when the local AHP store
+                         changes; it does not poll or fetch.
                          --json for scripts.
   status                 selected Lane, baton holder, open intents, tree/gate state
   pickup [--full]        compact handoff, commit and open-intent summary; --full expands all
@@ -110,16 +110,14 @@ async function run(argv) {
     case "dashboard": case "dash": case "overview": {
       const { values } = parse(rest, {
         json: { type: "boolean" },
-        watch: { type: "boolean", short: "w" },
-        interval: { type: "string", short: "n" }
+        watch: { type: "boolean", short: "w" }
       });
       const { dashboard } = await import("./dashboard.mjs");
       return dashboard({
         home,
         version: PKG.version,
         json: values.json,
-        watch: values.watch,
-        interval: values.interval ? Number(values.interval) : 5
+        watch: values.watch
       });
     }
     case "status": return cmdStatus(rest, home);

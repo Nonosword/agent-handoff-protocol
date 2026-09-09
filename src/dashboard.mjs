@@ -118,7 +118,7 @@ function render(rows, home, { footer = "", version = null } = {}) {
   const c = colors();
   const out = [""];
   const versionLabel = version ? ` v${version}` : "";
-  out.push(`  ${c.accent("Agent Handoff")}${versionLabel} ${c.subtle("·")} ${rows.length} project${rows.length === 1 ? "" : "s"}   ${c.subtle(home)}`);
+  out.push(`  ${c.bold(c.accent("Agent Handoff"))}${versionLabel} ${c.subtle("·")} ${rows.length} project${rows.length === 1 ? "" : "s"}   ${c.subtle(home)}`);
   out.push(`  ${c.rule("─".repeat(58))}`);
 
   const allLanes = rows.flatMap((row) => row.lanes);
@@ -189,14 +189,74 @@ function fingerprint(home) {
   }));
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
+function changeSignal() {
+  let pending = false;
+  let resolveWait = null;
+  return {
+    notify() {
+      pending = true;
+      if (resolveWait) {
+        const resolve = resolveWait;
+        resolveWait = null;
+        resolve();
+      }
+    },
+    wait() {
+      if (pending) {
+        pending = false;
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        resolveWait = () => { pending = false; resolve(); };
+      });
+    }
+  };
 }
 
-// Keep the zero frame on screen long enough for a terminal to paint it before
-// the refreshed frame replaces it. This is deliberately far shorter than the
-// one-second countdown cadence.
-const ZERO_FRAME_MS = 100;
+export function storeWatcher(home, notify) {
+  const watchers = [];
+  let rearmQueued = false;
+  const closeAll = () => {
+    while (watchers.length) watchers.pop().close();
+  };
+  const arm = () => {
+    closeAll();
+    const directories = [home];
+    for (let index = 0; index < directories.length; index += 1) {
+      const dir = directories[index];
+      try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (entry.isDirectory()) directories.push(path.join(dir, entry.name));
+        }
+      } catch { continue; }
+      try {
+        const watcher = fs.watch(dir, () => {
+          notify();
+          // A Lane directory may have appeared or been atomically replaced.
+          // Re-arm from the tree after the current event turn; this remains
+          // event-driven and does not poll the store.
+          if (!rearmQueued) {
+            rearmQueued = true;
+            queueMicrotask(() => { rearmQueued = false; arm(); });
+          }
+        });
+        // A directory can disappear while its watcher is active. Treat that
+        // as a change and re-arm from the remaining tree instead of allowing
+        // an unhandled EventEmitter error to terminate the dashboard.
+        watcher.on("error", () => {
+          notify();
+          if (!rearmQueued) {
+            rearmQueued = true;
+            queueMicrotask(() => { rearmQueued = false; arm(); });
+          }
+        });
+        watchers.push(watcher);
+      } catch { /* unreadable or vanished directories are skipped */ }
+    }
+  };
+  arm();
+  return closeAll;
+}
 
 function frameLines(frame) {
   const lines = frame.split("\n");
@@ -227,7 +287,7 @@ export function drawFrame(out, frame, previous = null) {
   return lines;
 }
 
-export async function dashboard({ home, version = null, json = false, watch = false, interval = 5 } = {}) {
+export async function dashboard({ home, version = null, json = false, watch = false } = {}) {
   if (json) {
     process.stdout.write(`${JSON.stringify(toJson(snapshot(home), version, home), null, 2)}\n`);
     return 0;
@@ -242,11 +302,11 @@ export async function dashboard({ home, version = null, json = false, watch = fa
     return result.anyError ? 1 : 0;
   }
 
-  const every = Math.max(1, Math.ceil(Number(interval) || 5));
   const out = process.stdout;
   const input = process.stdin;
+  const signal = changeSignal();
   let running = true;
-  const stop = () => { running = false; };
+  const stop = () => { running = false; signal.notify(); };
   const onInput = (data) => {
     // Raw mode prevents touchpad arrow-key escape sequences from echoing into
     // the dashboard. Honour Ctrl-C ourselves because raw mode disables the
@@ -263,41 +323,27 @@ export async function dashboard({ home, version = null, json = false, watch = fa
   }
   out.write("\x1b[?1049h\x1b[?25l");
 
+  let closeWatcher = () => {};
   try {
     let key = fingerprint(home);
     let rows = snapshot(home);
-    let changed = null;
-    let remaining = every;
+    let updatedAt = new Date().toTimeString().slice(0, 8);
     let previousFrame = null;
+    closeWatcher = storeWatcher(home, () => signal.notify());
     while (running) {
-      const footer = `${changed ? `updated ${changed} · ` : ""}refresh in ${remaining}s · ctrl-c to exit`;
-      const frame = render(rows, home, { version, footer });
+      const frame = render(rows, home, { version, footer: `updated at ${updatedAt}` });
       previousFrame = drawFrame(out, frame.text, previousFrame);
-      changed = null;
-
-      // `0` is a real, visible countdown state. Once it has been painted, use
-      // that zero point to perform the bounded state refresh, then begin the
-      // next 5 → 0 cycle. Previously this work happened immediately after 1,
-      // which made the counter jump straight back to 5.
-      if (remaining === 0) {
-        await sleep(ZERO_FRAME_MS);
-        if (!running) break;
-        const next = fingerprint(home);
-        if (next !== key) {
-          key = next;
-          rows = snapshot(home);
-          changed = new Date().toTimeString().slice(0, 8);
-        }
-        remaining = every;
-        continue;
-      }
-
-      await sleep(1000);
+      await signal.wait();
       if (!running) break;
 
-      remaining -= 1;
+      const next = fingerprint(home);
+      if (next === key) continue;
+      key = next;
+      rows = snapshot(home);
+      updatedAt = new Date().toTimeString().slice(0, 8);
     }
   } finally {
+    closeWatcher();
     out.write("\x1b[?25h\x1b[?1049l");
     if (rawInput) {
       input.removeListener("data", onInput);

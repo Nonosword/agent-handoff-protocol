@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { canonicalWorkerId, WORKERS } from "../src/worker-detect.mjs";
 import { project, makeSessionId, assertCanOpen, assertCanPromote, assertCanEnd } from "../src/lifecycle.mjs";
@@ -695,20 +695,19 @@ test("pickup is compact by default and --full expands omitted commits", () => {
   assert.match(full.out, /unmatched-11/);
 });
 
-test("dashboard watch redraws only changed rows, counts through zero, consumes terminal input, and bounds polling", () => {
+test("dashboard watch is event-driven, redraws only changed rows, and consumes terminal input", () => {
   const source = fs.readFileSync(path.join(REPO, "src", "dashboard.mjs"), "utf8");
   assert.doesNotMatch(source, /logRange|isClean|dirtyPaths/);
   assert.match(source, /\\x1b\[H\\x1b\[2J/);
   assert.match(source, /lines\[index\] === previous\[index\]/);
   assert.match(source, /\\x1b\[\$\{index \+ 1\};1H\\x1b\[2K/);
+  assert.match(source, /c\.bold\(c\.accent\("Agent Handoff"\)\)/);
   assert.match(source, /input\.setRawMode\(true\)/);
-  assert.match(source, /refresh in \$\{remaining\}s/);
-  assert.match(source, /if \(remaining === 0\)/);
-  assert.match(source, /await sleep\(ZERO_FRAME_MS\)/);
+  assert.match(source, /updated at \$\{updatedAt\}/);
+  assert.match(source, /fs\.watch\(/);
+  assert.match(source, /await signal\.wait\(\)/);
+  assert.doesNotMatch(source, /refresh in|setInterval|await sleep\(1000\)/);
   assert.match(source, /git\.headView/);
-  const zeroFrame = source.indexOf("if (remaining === 0)");
-  const refresh = source.indexOf("const next = fingerprint(home)", zeroFrame);
-  assert.ok(zeroFrame >= 0 && refresh > zeroFrame, "state refresh must happen from the rendered zero state");
 
   const writes = [];
   const out = { write: (value) => writes.push(value) };
@@ -728,6 +727,34 @@ test("dashboard watch redraws only changed rows, counts through zero, consumes t
   writes.length = 0;
   drawFrame(out, "one\n", first);
   assert.deepEqual(writes, ["\x1b[2;1H\x1b[2K"]);
+});
+
+test("dashboard store watcher wakes on a local filesystem event", () => {
+  const home = path.join(TMP, "dashboard-fs-watch");
+  fs.mkdirSync(home, { recursive: true });
+  const dashboardModule = pathToFileURL(path.join(REPO, "src", "dashboard.mjs")).href;
+  const source = `
+    import fs from "node:fs";
+    import { storeWatcher } from ${JSON.stringify(dashboardModule)};
+    const home = process.env.AHP_WATCH_TEST_HOME;
+    let close = () => {};
+    close = storeWatcher(home, () => {
+      close();
+      process.stdout.write("changed\\n");
+      process.exit(0);
+    });
+    setTimeout(() => fs.writeFileSync(home + "/event", "changed\\n"), 25);
+    setTimeout(() => process.exit(2), 2000);
+  `;
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+    cwd: REPO,
+    env: { ...ENV, AHP_WATCH_TEST_HOME: home },
+    encoding: "utf8",
+    shell: false,
+    timeout: 3000
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "changed");
 });
 
 test("MCP Lane tools create, list, and edit the same project metadata", () => {
