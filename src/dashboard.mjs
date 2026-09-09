@@ -193,6 +193,11 @@ function sleep(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
+// Keep the zero frame on screen long enough for a terminal to paint it before
+// the refreshed frame replaces it. This is deliberately far shorter than the
+// one-second countdown cadence.
+const ZERO_FRAME_MS = 100;
+
 function frameLines(frame) {
   const lines = frame.split("\n");
   // `render` terminates a frame with a newline. That terminator is not a
@@ -269,18 +274,28 @@ export async function dashboard({ home, version = null, json = false, watch = fa
       const frame = render(rows, home, { version, footer });
       previousFrame = drawFrame(out, frame.text, previousFrame);
       changed = null;
+
+      // `0` is a real, visible countdown state. Once it has been painted, use
+      // that zero point to perform the bounded state refresh, then begin the
+      // next 5 → 0 cycle. Previously this work happened immediately after 1,
+      // which made the counter jump straight back to 5.
+      if (remaining === 0) {
+        await sleep(ZERO_FRAME_MS);
+        if (!running) break;
+        const next = fingerprint(home);
+        if (next !== key) {
+          key = next;
+          rows = snapshot(home);
+          changed = new Date().toTimeString().slice(0, 8);
+        }
+        remaining = every;
+        continue;
+      }
+
       await sleep(1000);
       if (!running) break;
 
       remaining -= 1;
-      if (remaining > 0) continue;
-      const next = fingerprint(home);
-      if (next !== key) {
-        key = next;
-        rows = snapshot(home);
-        changed = new Date().toTimeString().slice(0, 8);
-      }
-      remaining = every;
     }
   } finally {
     out.write("\x1b[?25h\x1b[?1049l");

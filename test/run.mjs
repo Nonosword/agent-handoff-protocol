@@ -649,7 +649,7 @@ test("pickup is compact by default and --full expands omitted commits", () => {
   assert.match(full.out, /unmatched-11/);
 });
 
-test("dashboard watch redraws only changed rows, consumes terminal input, and bounds polling", () => {
+test("dashboard watch redraws only changed rows, counts through zero, consumes terminal input, and bounds polling", () => {
   const source = fs.readFileSync(path.join(REPO, "src", "dashboard.mjs"), "utf8");
   assert.doesNotMatch(source, /logRange|isClean|dirtyPaths/);
   assert.match(source, /\\x1b\[H\\x1b\[2J/);
@@ -657,8 +657,12 @@ test("dashboard watch redraws only changed rows, consumes terminal input, and bo
   assert.match(source, /\\x1b\[\$\{index \+ 1\};1H\\x1b\[2K/);
   assert.match(source, /input\.setRawMode\(true\)/);
   assert.match(source, /refresh in \$\{remaining\}s/);
-  assert.match(source, /if \(remaining > 0\) continue/);
+  assert.match(source, /if \(remaining === 0\)/);
+  assert.match(source, /await sleep\(ZERO_FRAME_MS\)/);
   assert.match(source, /git\.headView/);
+  const zeroFrame = source.indexOf("if (remaining === 0)");
+  const refresh = source.indexOf("const next = fingerprint(home)", zeroFrame);
+  assert.ok(zeroFrame >= 0 && refresh > zeroFrame, "state refresh must happen from the rendered zero state");
 
   const writes = [];
   const out = { write: (value) => writes.push(value) };
