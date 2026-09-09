@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { explainStoreFsError } from "./storage-errors.mjs";
-import { acquireLock, releaseLock } from "./worklog.mjs";
+import { acquireLock, releaseLock, analyze, readEntries } from "./worklog.mjs";
 
 export const LEGACY_LANE_ID = "main";
 export const LEGACY_LANE_TITLE = "Main / legacy";
@@ -198,6 +198,10 @@ export function edit(project, wanted, patch) {
     if (!candidate.description) throw new Error("Lane description cannot be empty");
     if (patch.status != null) {
       if (!LANE_STATUSES.has(patch.status)) throw new Error("lane status must be active | blocked | done | archived");
+      if (patch.status === "archived") {
+        const state = analyze(readEntries(current.worklog));
+        if (state.batonHeld) throw new Error(`Lane "${current.id}" holds a baton and cannot be archived — end the session or choose a non-archived status first`);
+      }
       candidate.status = patch.status;
     }
     const otherKeys = new Set();

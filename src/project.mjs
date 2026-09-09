@@ -140,10 +140,18 @@ export function resolve({ cwd = process.cwd(), project = null, env = process.env
 
 function findInRegistry(registry, want) {
   if (registry.projects[want]) return { id: want, entry: registry.projects[want] };
-  for (const [id, entry] of Object.entries(registry.projects)) {
-    if (entry.name === want) return { id, entry };
+  const named = Object.entries(registry.projects).filter(([, entry]) => entry.name === want);
+  if (named.length === 1) {
+    const [id, entry] = named[0];
+    return { id, entry };
   }
+  if (named.length > 1) throw new Error(`project name "${want}" is ambiguous: ${named.map(([id]) => id).join(", ")}. Use an explicit project id.`);
   return null;
+}
+
+function assertNameAvailable(registry, name, exceptId = null) {
+  const collision = Object.entries(registry.projects).find(([id, entry]) => id !== exceptId && entry.name === name);
+  if (collision) throw new Error(`project name "${name}" is already used by ${collision[0]}; choose a unique name or use that project's id.`);
 }
 
 function descriptor(id, entry, home, meta) {
@@ -166,8 +174,10 @@ export function register({ cwd = process.cwd(), home, name = null, autoreg = fal
   if (!ident) throw new Error("not inside a Git repository");
   return mutateRegistry(home, (registry) => {
     const existing = registry.projects[ident.id] ?? { roots: [] };
+    const entryName = name ?? existing.name ?? ident.name;
+    assertNameAvailable(registry, entryName, ident.id);
     const entry = {
-      name: name ?? existing.name ?? ident.name,
+      name: entryName,
       remote: ident.remote ?? existing.remote ?? null,
       roots: [...new Set([...(existing.roots ?? []), ident.root])],
       created: existing.created ?? new Date().toISOString()
@@ -188,6 +198,7 @@ export function rename(home, idOrName, newName) {
   return mutateRegistry(home, (registry) => {
     const hit = findInRegistry(registry, idOrName);
     if (!hit) throw new Error(`unknown project: ${idOrName}`);
+    assertNameAvailable(registry, newName, hit.id);
     registry.projects[hit.id].name = newName;
     return hit.id;
   });

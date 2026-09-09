@@ -604,6 +604,36 @@ test("Lane registry supports Unicode ids, reclaims stale locks, and rejects unsa
   assert.match(unsafe.err, /AHP_LANES_INVALID.*canonical safe id/);
 });
 
+test("a held Lane cannot be archived, and project names remain unambiguous", () => {
+  const P = mkrepo("projHeldArchive");
+  assert.equal(ahp(["start", "--plan", "held archive", "--gate", "pass", "--evidence", "e"], P).code, 0);
+  const held = ahp(["lane", "edit", "held-archive", "--status", "archived"], P);
+  assert.equal(held.code, 1);
+  assert.match(held.err, /holds a baton.*cannot be archived/);
+  assert.equal(ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "e"], P).code, 0);
+  assert.equal(ahp(["lane", "edit", "held-archive", "--status", "archived"], P).code, 0);
+
+  const A = mkrepo("projUniqueNameA");
+  const B = mkrepo("projUniqueNameB");
+  assert.equal(ahp(["project", "add", "--name", "shared-name"], A).code, 0);
+  const duplicate = ahp(["project", "add", "--name", "shared-name"], B);
+  assert.equal(duplicate.code, 1);
+  assert.match(duplicate.err, /already used/);
+
+  // Existing stores may already contain duplicate historical names. They must
+  // fail closed instead of silently selecting the first registry entry.
+  assert.equal(ahp(["project", "add", "--name", "first-name"], B).code, 0);
+  const registryFile = path.join(HOME, "projects.json");
+  const registry = JSON.parse(fs.readFileSync(registryFile, "utf8"));
+  const entries = Object.entries(registry.projects).filter(([, entry]) => ["shared-name", "first-name"].includes(entry.name));
+  assert.equal(entries.length, 2);
+  entries.forEach(([, entry]) => { entry.name = "legacy-duplicate"; });
+  fs.writeFileSync(registryFile, JSON.stringify(registry));
+  const ambiguous = ahp(["status", "--project", "legacy-duplicate"], A);
+  assert.equal(ambiguous.code, 1);
+  assert.match(ambiguous.err, /project name "legacy-duplicate" is ambiguous.*Use an explicit project id/);
+});
+
 test("pickup is compact by default and --full expands omitted commits", () => {
   const P = mkrepo("projPickupLimit");
   ahp(["start", "--plan", "bounded pickup", "--gate", "pass", "--evidence", "e"], P);
