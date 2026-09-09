@@ -792,6 +792,25 @@ test("MCP server: initialize + tools/list + tools/call", () => {
   assert.match(call.result.content[0].text, /project\s+projA/);
 });
 
+test("MCP desktop callers need explicit project context when the server cwd is not a repo", () => {
+  const messages = [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: {}, clientInfo: { name: "Claude Desktop" } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/list" },
+    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ahp_status", arguments: {} } },
+    { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "ahp_lane_list", arguments: { cwd: A } } },
+    { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "ahp_status", arguments: { cwd: "relative/path" } } }
+  ].map((message) => JSON.stringify(message)).join("\n") + "\n";
+  const result = spawnSync(process.execPath, [MCP], { cwd: os.tmpdir(), input: messages, env: ENV, encoding: "utf8", shell: false });
+  const byId = new Map(result.stdout.trim().split("\n").map((line) => JSON.parse(line)).map((message) => [message.id, message]));
+  const status = byId.get(3).result;
+  assert.equal(status.isError, true);
+  assert.match(status.content[0].text, /Pass the target checkout as an absolute "cwd" argument/);
+  assert.match(byId.get(2).result.tools.find((tool) => tool.name === "ahp_status").inputSchema.properties.cwd.description, /desktop MCP host/i);
+  assert.equal(byId.get(4).result.isError, false, byId.get(4).result.content[0].text);
+  assert.equal(byId.get(5).result.isError, true);
+  assert.match(byId.get(5).result.content[0].text, /must be an absolute path/);
+});
+
 test("MCP array args (commits/refs/landmines/findings) reach the CLI", () => {
   // regression: toArgv's list() helper appended to the globals array *after*
   // it had already been spread into the command argv, so every array-valued

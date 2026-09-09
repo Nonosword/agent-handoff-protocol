@@ -101,6 +101,12 @@ plus `lane` to select its work stream. Carry the same `lane` through pickup,
 start and writes; omit it only when no ambiguity exists.
 Lane-management tools resolve the Project from `cwd` / `project` directly.
 
+For **Claude Desktop**, pass an absolute `cwd` inside the target Git checkout
+on every project-scoped MCP call (or use a registered `project` id/name).
+Desktop launches its stdio server independently of the chat UI, so the server
+cannot infer a repository from the visible conversation. Once the Project has
+multiple Lanes, also pass its matching `lane`.
+
 ## Tools
 
 | tool | purpose |

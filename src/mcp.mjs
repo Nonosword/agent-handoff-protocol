@@ -11,6 +11,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { spawnSync } from "node:child_process";
 import { canonicalWorkerId } from "./worker-detect.mjs";
+import * as git from "./git.mjs";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -19,15 +20,15 @@ const PKG = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "u
 const PROTOCOL_VERSION = "2025-06-18";
 
 const COMMON = {
-  cwd: { type: "string", description: "directory to resolve the project from (default: the server's working directory)" },
-  project: { type: "string", description: "explicit project id or name (overrides cwd detection)" },
+  cwd: { type: "string", description: "absolute directory inside the target Git checkout. Required when a desktop MCP host does not inherit the chat's project directory; project may be supplied instead." },
+  project: { type: "string", description: "registered project id or name (overrides cwd detection; use when an absolute cwd is unavailable)" },
   lane: { type: "string", description: "existing Lane id, title, or alias; omit only when the Project has no selection ambiguity" }
 };
 
 const TOOLS = [
   {
     name: "ahp_status",
-    description: "Selected Lane, baton holder, open intents, and current working-tree / gate state.",
+    description: "Selected Lane, baton holder, open intents, and current working-tree / gate state. Desktop hosts must pass the target checkout's absolute cwd, or project.",
     inputSchema: { type: "object", properties: { ...COMMON } }
   },
   {
@@ -167,6 +168,21 @@ function assertToolArguments(name, args) {
   }
 }
 
+function projectContextError(args) {
+  if (args.cwd) {
+    if (!path.isAbsolute(args.cwd)) {
+      return 'tools/call argument "cwd" must be an absolute path inside the target Git repository';
+    }
+    return null;
+  }
+  if (args.project || git.isGitRepo(process.cwd())) return null;
+  return (
+    `AHP MCP is running outside a Git repository (${process.cwd()}). ` +
+    'Pass the target checkout as an absolute "cwd" argument, or pass its registered "project" id/name. ' +
+    'Desktop MCP servers do not inherit a chat workspace automatically.'
+  );
+}
+
 function toArgv(name, a = {}) {
   assertToolArguments(name, a);
   const g = [];
@@ -247,6 +263,8 @@ let clientName = null;
 
 function callTool(name, args) {
   const argv = toArgv(name, args);
+  const contextError = projectContextError(args);
+  if (contextError) return { text: contextError, isError: true };
   const env = { ...process.env };
   if (clientName) {
     // Empty inherited variables mean unspecified in normal host launchers;
