@@ -25,8 +25,8 @@ checks the independent `~/.qoder-cn/mcp.json`; it never calls `qoder mcp` for
 CN. Restart the host after registration. Qoder CN exposes no remove CLI, so
 `--uninstall` safely removes only AHP's entry from its dedicated MCP JSON.
 
-Cursor, VS Code and Windsurf have no registration CLI, so the installer merges
-one entry into their dedicated MCP config file directly (a real JSON
+Claude Desktop, Cursor, VS Code and Windsurf have no registration CLI, so the
+installer merges one entry into their dedicated MCP config file directly (a real JSON
 parse-merge-write — nothing else in the file is touched; a file the installer
 cannot parse is left alone with a warning, never overwritten). `--uninstall`
 removes only that entry.
@@ -38,6 +38,16 @@ removes only that entry.
 ```json
 { "mcpServers": { "agent-handoff": { "command": "node", "args": ["<REPO>/bin/ahp-mcp"] } } }
 ```
+
+**Claude Desktop (macOS)** —
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "agent-handoff": { "command": "node", "args": ["<REPO>/bin/ahp-mcp"] } } }
+```
+
+Claude Desktop and Claude Code are separate hosts. Configure either one without
+requiring the other; quit and reopen Claude Desktop after changing its config.
 
 **Codex** — `~/.codex/config.toml`:
 

@@ -234,6 +234,52 @@ test("installer atomically merges and removes only its MCP JSON entry", () => {
   assert.equal(fs.existsSync(`${config}.ahp.lock`), false);
 });
 
+test("installer registers Claude Desktop independently from the Claude Code CLI", () => {
+  const root = path.join(TMP, "installer-claude-desktop");
+  const home = path.join(root, "home");
+  const desktopDir = path.join(home, "Library", "Application Support", "Claude");
+  const config = path.join(desktopDir, "claude_desktop_config.json");
+  fs.mkdirSync(desktopDir, { recursive: true });
+  const original = {
+    coworkUserFilesPath: "/keep-this-setting",
+    preferences: { preserve: true },
+    mcpServers: { unrelated: { command: "other-mcp", args: ["--keep"] } }
+  };
+  fs.writeFileSync(config, JSON.stringify(original, null, 2) + "\n");
+  // Limit PATH to Node and system programs: no `claude` executable is present.
+  // Desktop registration must still use its own JSON config successfully.
+  const env = {
+    ...ENV,
+    HOME: home,
+    PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    AHP_BIN_DIR: path.join(root, "bin"),
+    AHP_HOME: path.join(root, "store"),
+    CLAUDE_DESKTOP_MCP: config,
+    CLAUDE_DESKTOP_APP: path.join(root, "missing-Claude.app"),
+    QODER_APP: path.join(root, "no-qoder.app"),
+    QODER_CONFIG: path.join(home, ".qoder"),
+    QODER_CN_APP: path.join(root, "no-qoder-cn.app"),
+    QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+  };
+  const install = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "mcp", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(install.status, 0, install.stdout + install.stderr);
+  assert.match(install.stdout, /claude\s+not found/);
+  assert.match(install.stdout, /registered with Claude Desktop/);
+  const registered = JSON.parse(fs.readFileSync(config, "utf8"));
+  assert.equal(registered.coworkUserFilesPath, original.coworkUserFilesPath);
+  assert.deepEqual(registered.preferences, original.preferences);
+  assert.deepEqual(registered.mcpServers.unrelated, original.mcpServers.unrelated);
+  assert.deepEqual(registered.mcpServers["agent-handoff"], {
+    command: "node",
+    args: [path.join(REPO, "bin", "ahp-mcp")],
+    env: { AHP_WORKER_ID: "claude", AHP_MODEL: "claude", AHP_RUNTIME: "claude-desktop" }
+  });
+
+  const uninstall = spawnSync("bash", [path.join(REPO, "install.sh"), "--uninstall", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(uninstall.status, 0, uninstall.stdout + uninstall.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(config, "utf8")), original, "Claude Desktop uninstall leaves unrelated JSON untouched");
+});
+
 test("verify passes for the produced worklog", () => {
   const r = ahp(["verify"], A);
   assert.equal(r.code, 0, r.err);

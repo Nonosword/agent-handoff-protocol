@@ -25,6 +25,11 @@ BIN_ON_PATH=0; case ":$PATH:" in *":$BIN_DIR:"*) BIN_ON_PATH=1 ;; esac
 [ "$BIN_ON_PATH" = 1 ] || export PATH="$BIN_DIR:$PATH"
 STORE="${AHP_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-handoff}"
 CLAUDE_SKILL_DIR="$HOME/.claude/skills/agent-handoff-protocol"
+# Claude Desktop is a distinct MCP host from Claude Code. It owns a dedicated
+# JSON configuration, whereas Claude Code is registered through `claude mcp`.
+# Keep an override for tests and non-standard desktop installations.
+CLAUDE_DESKTOP_MCP="${CLAUDE_DESKTOP_MCP:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
+CLAUDE_DESKTOP_APP="${CLAUDE_DESKTOP_APP:-/Applications/Claude.app}"
 CODEX_AGENTS="$HOME/.codex/AGENTS.md"
 # JSON-config hosts: each owns a dedicated MCP-only file (never a shared
 # settings file), so a safe merge-in-place is possible (see json_mcp_register).
@@ -383,6 +388,7 @@ if [ "$UNINSTALL" = 1 ]; then
   # Qoder CN has no remove subcommand. Its dedicated MCP JSON can be edited
   # safely by the existing parse-and-merge helper without touching Qoder.
   [ -f "$QODER_CN_MCP" ] && json_mcp_unregister "Qoder CN" "$QODER_CN_MCP" mcpServers
+  json_mcp_unregister "Claude Desktop" "$CLAUDE_DESKTOP_MCP" mcpServers
   json_mcp_unregister "Cursor" "$CURSOR_MCP" mcpServers
   json_mcp_unregister "VS Code" "$VSCODE_MCP" servers
   json_mcp_unregister "Windsurf" "$WINDSURF_MCP" mcpServers
@@ -477,6 +483,11 @@ HAS_CLAUDE=0; command -v claude >/dev/null 2>&1 && HAS_CLAUDE=1
 HAS_CODEX=0;  command -v codex  >/dev/null 2>&1 && HAS_CODEX=1
 [ "$HAS_CLAUDE" = 1 ] && ok "claude" "$(claude --version 2>/dev/null | head -1)" || skip "claude" "not found"
 [ "$HAS_CODEX" = 1 ]  && ok "codex"  "$(codex --version 2>/dev/null | head -1)"  || skip "codex" "not found"
+# Do not infer the Desktop app from the Claude Code CLI (or vice versa). A
+# config file is enough to identify an existing Desktop installation; the app
+# bundle covers the first-run case before it has written a config file.
+HAS_CLAUDE_DESKTOP=0; { [ -f "$CLAUDE_DESKTOP_MCP" ] || [ -d "$CLAUDE_DESKTOP_APP" ]; } && HAS_CLAUDE_DESKTOP=1
+[ "$HAS_CLAUDE_DESKTOP" = 1 ] && ok "claude desktop" "detected" || skip "claude desktop" "not found"
 # These hosts are independently detected through their own CLI, app or config.
 HAS_CURSOR=0;   { command -v cursor  >/dev/null 2>&1 || [ -d "$HOME/.cursor" ]; }            && HAS_CURSOR=1
 HAS_VSCODE=0;   { command -v code    >/dev/null 2>&1 || [ -d "$(dirname "$VSCODE_MCP")" ]; } && HAS_VSCODE=1
@@ -639,6 +650,13 @@ install_mcp() {
     "env": { "AHP_WORKER_ID": "claude", "AHP_MODEL": "claude", "AHP_RUNTIME": "claude-code" } } } }
 EOF
   }
+
+  if [ "$HAS_CLAUDE_DESKTOP" = 1 ]; then
+    # This is intentionally a JSON registration, not `claude mcp add`: Claude
+    # Desktop does not share Claude Code's CLI-managed configuration.
+    json_mcp_register "Claude Desktop" "$CLAUDE_DESKTOP_MCP" mcpServers \
+      "$(printf '{"command":"node","args":["%s/bin/ahp-mcp"],"env":{"AHP_WORKER_ID":"claude","AHP_MODEL":"claude","AHP_RUNTIME":"claude-desktop"}}' "$REPO")"
+  else skip "Claude Desktop" "not found"; fi
 
   register_host "Codex" codex \
     --env AHP_WORKER_ID=codex --env AHP_MODEL=codex --env AHP_RUNTIME=codex || {
