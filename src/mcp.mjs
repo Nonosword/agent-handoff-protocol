@@ -140,7 +140,35 @@ const TOOLS = [
   }
 ];
 
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const invalidParams = (message) => Object.assign(new Error(message), { rpcCode: -32602 });
+
+function assertToolArguments(name, args) {
+  const tool = TOOLS.find((candidate) => candidate.name === name);
+  if (!tool) throw invalidParams(`unknown tool: ${name}`);
+  if (!isObject(args)) throw invalidParams("tools/call arguments must be an object");
+  const schema = tool.inputSchema;
+  for (const required of schema.required ?? []) {
+    const value = args[required];
+    if (typeof value !== "string" || !value.trim()) {
+      throw invalidParams(`tools/call requires a non-empty string argument "${required}"`);
+    }
+  }
+  for (const [key, value] of Object.entries(args)) {
+    const rule = schema.properties?.[key];
+    if (!rule || value === undefined) continue;
+    if (rule.type === "string" && typeof value !== "string") throw invalidParams(`tools/call argument "${key}" must be a string`);
+    if (rule.type === "number" && (!Number.isFinite(value))) throw invalidParams(`tools/call argument "${key}" must be a finite number`);
+    if (rule.type === "boolean" && typeof value !== "boolean") throw invalidParams(`tools/call argument "${key}" must be boolean`);
+    if (rule.type === "array" && (!Array.isArray(value) || value.some((item) => typeof item !== "string"))) {
+      throw invalidParams(`tools/call argument "${key}" must be an array of strings`);
+    }
+    if (rule.enum && !rule.enum.includes(value)) throw invalidParams(`tools/call argument "${key}" must be one of: ${rule.enum.join(", ")}`);
+  }
+}
+
 function toArgv(name, a = {}) {
+  assertToolArguments(name, a);
   const g = [];
   if (a.project) g.push("--project", String(a.project));
   if (a.cwd) g.push("--cwd", String(a.cwd));
@@ -238,6 +266,9 @@ function reply(id, result) { send({ jsonrpc: "2.0", id, result }); }
 function fail(id, code, message) { send({ jsonrpc: "2.0", id, error: { code, message } }); }
 
 function handle(msg) {
+  if (!isObject(msg) || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
+    return fail(null, -32600, "invalid request");
+  }
   if (msg.method && msg.id === undefined) return; // notification
   const { id, method, params } = msg;
   try {
@@ -260,12 +291,14 @@ function handle(msg) {
     if (method === "tools/list") return reply(id, { tools: TOOLS });
     if (method === "tools/call") {
       const { name, arguments: args } = params ?? {};
+      if (typeof name !== "string" || !name) return fail(id, -32602, "tools/call requires a tool name");
+      if (args !== undefined && !isObject(args)) return fail(id, -32602, "tools/call arguments must be an object");
       const r = callTool(name, args ?? {});
       return reply(id, { content: [{ type: "text", text: r.text }], isError: r.isError });
     }
     return fail(id, -32601, `method not found: ${method}`);
   } catch (e) {
-    return fail(id, -32603, e.message);
+    return fail(id, e.rpcCode ?? -32603, e.message);
   }
 }
 
@@ -276,7 +309,7 @@ export function serve() {
     if (!s) return;
     let msg;
     try { msg = JSON.parse(s); }
-    catch { return; }
+    catch { return fail(null, -32700, "parse error"); }
     handle(msg);
   });
   rl.on("close", () => process.exit(0));

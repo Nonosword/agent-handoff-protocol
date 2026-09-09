@@ -687,6 +687,28 @@ test("MCP array args (commits/refs/landmines/findings) reach the CLI", () => {
   assert.equal(ahp(["verify"], P).code, 0);
 });
 
+test("MCP rejects malformed frames and never stringifies absent write arguments", () => {
+  const P = mkrepo("projMcpInvalid");
+  const messages = [
+    "{not json}",
+    JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ahp_start", arguments: { gate: "pass", cwd: P } } }),
+    JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "ahp_start", arguments: { plan: "p", gate: 7, cwd: P } } }),
+    JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ahp_intent_open", arguments: "not-an-object" } })
+  ].join("\n") + "\n";
+  const result = spawnSync(process.execPath, [MCP], { cwd: P, env: ENV, input: messages, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const responses = result.stdout.trim().split("\n").map(JSON.parse);
+  assert.equal(responses[0].error.code, -32700);
+  assert.equal(responses[1].error.code, -32602);
+  assert.match(responses[1].error.message, /plan/);
+  assert.equal(responses[2].error.code, -32602);
+  assert.match(responses[2].error.message, /gate/);
+  assert.equal(responses[3].error.code, -32602);
+  const status = ahp(["status", "--json"], P);
+  assert.equal(status.code, 0, status.err);
+  assert.equal(JSON.parse(status.out).lastSeq, 0, "invalid MCP requests must not append literal undefined records");
+});
+
 test("dashboard runs from outside any repo and lists projects", () => {
   const r = ahp(["dashboard"], os.tmpdir());
   assert.ok(r.code === 0 || r.code === 1, r.err);
