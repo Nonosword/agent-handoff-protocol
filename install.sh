@@ -178,30 +178,139 @@ menu() {
 # new dependency, no sed/awk-on-JSON. Defined here (ahead of both the
 # uninstall block below and install_mcp further down) so both can call it.
 json_mcp_op() {
-  node -e '
-    const fs = require("fs");
-    const [op, file, key, name, entryJson] = process.argv.slice(1);
-    let doc = {};
-    if (fs.existsSync(file)) {
-      const text = fs.readFileSync(file, "utf8").trim();
-      if (text) { try { doc = JSON.parse(text); } catch { console.log("parse_error"); process.exit(0); } }
+  # Node 20 is already a prerequisite. Keep the complete update in one
+  # process: a cooperating installer holds a short lock; a non-cooperating
+  # host writer is detected by a content fingerprint immediately before the
+  # atomic replacement and gets one fresh read/merge attempt.
+  node - "$@" <<'NODE'
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const [op, file, key, name, entryJson] = process.argv.slice(2);
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const fingerprint = (text, exists) => exists ? crypto.createHash("sha256").update(text).digest("hex") : "absent";
+
+function readDocument() {
+  let text = "";
+  let exists = false;
+  try { text = fs.readFileSync(file, "utf8"); exists = true; }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+  const trimmed = text.trim();
+  let doc = {};
+  if (trimmed) {
+    try { doc = JSON.parse(trimmed); }
+    catch { return { parseError: true }; }
+  }
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return { parseError: true };
+  return { doc, fingerprint: fingerprint(text, exists) };
+}
+
+function writeAll(fd, text) {
+  const bytes = Buffer.from(text);
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = fs.writeSync(fd, bytes, offset, bytes.length - offset);
+    if (!Number.isInteger(written) || written <= 0) throw new Error("short write while updating MCP JSON");
+    offset += written;
+  }
+}
+
+function atomicReplace(text) {
+  const dir = path.dirname(file);
+  const tmp = path.join(dir, `.${path.basename(file)}.ahp.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
+  let fd;
+  try {
+    fd = fs.openSync(tmp, "wx", 0o600);
+    writeAll(fd, text);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* best effort */ }
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    throw error;
+  }
+}
+
+function ownerAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code === "EPERM"; }
+}
+
+function acquireLock() {
+  const lock = `${file}.ahp.lock`;
+  const token = `${process.pid}\n${Date.now()}\n${Math.random().toString(36).slice(2)}\n`;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    let fd;
+    try {
+      fd = fs.openSync(lock, "wx", 0o600);
+      writeAll(fd, token);
+      fs.fsyncSync(fd);
+      return { lock, token };
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      try {
+        const pid = Number.parseInt(fs.readFileSync(lock, "utf8").split("\n", 1)[0], 10);
+        if (!ownerAlive(pid)) { fs.rmSync(lock, { force: true }); continue; }
+      } catch { /* an unreadable lock is never safe to reclaim */ }
+      sleep(20);
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
     }
-    if (typeof doc !== "object" || doc === null || Array.isArray(doc)) { console.log("parse_error"); process.exit(0); }
+  }
+  throw new Error(`could not acquire MCP configuration lock: ${lock}`);
+}
+
+function releaseLock({ lock, token }) {
+  try { if (fs.readFileSync(lock, "utf8") === token) fs.rmSync(lock, { force: true }); }
+  catch { /* best effort */ }
+}
+
+let entry;
+if (op === "set") {
+  try { entry = JSON.parse(entryJson); }
+  catch { console.error("invalid MCP server JSON"); process.exit(1); }
+}
+fs.mkdirSync(path.dirname(file), { recursive: true });
+const lock = acquireLock();
+let output;
+try {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const before = readDocument();
+    if (before.parseError) { output = "parse_error"; break; }
+    const doc = before.doc;
     if (!doc[key] || typeof doc[key] !== "object" || Array.isArray(doc[key])) doc[key] = {};
+    let result;
     if (op === "delete") {
-      if (!(name in doc[key])) { console.log("absent"); process.exit(0); }
+      if (!(name in doc[key])) { output = "absent"; break; }
       delete doc[key][name];
-      fs.writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
-      console.log("removed");
+      result = "removed";
     } else {
-      const entry = JSON.parse(entryJson);
       const cur = doc[key][name];
-      if (cur && JSON.stringify(cur) === JSON.stringify(entry)) { console.log("unchanged"); process.exit(0); }
+      if (cur && JSON.stringify(cur) === JSON.stringify(entry)) { output = "unchanged"; break; }
       doc[key][name] = entry;
-      fs.writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
-      console.log(cur ? "updated" : "added");
+      result = cur ? "updated" : "added";
     }
-  ' "$@"
+    // A host that does not observe our lock may have changed the file after
+    // our read. Re-read and merge once from that current content instead of
+    // blindly replacing it with a stale document.
+    const latest = readDocument();
+    if (latest.parseError) { output = "parse_error"; break; }
+    if (latest.fingerprint !== before.fingerprint) {
+      if (attempt === 0) continue;
+      throw new Error("MCP configuration changed repeatedly during merge; retry the installer");
+    }
+    atomicReplace(JSON.stringify(doc, null, 2) + "\n");
+    output = result;
+    break;
+  }
+} finally {
+  releaseLock(lock);
+}
+console.log(output);
+NODE
 }
 
 json_mcp_register() {

@@ -191,6 +191,49 @@ test("installer detects Qoder CN separately and never routes it through qoder mc
   assert.doesNotMatch(output, /register with Qoder[\s\S]*mcp add/);
 });
 
+test("installer atomically merges and removes only its MCP JSON entry", () => {
+  const root = path.join(TMP, "installer-json-merge");
+  const home = path.join(root, "home");
+  const cursor = path.join(home, ".cursor");
+  const config = path.join(cursor, "mcp.json");
+  fs.mkdirSync(cursor, { recursive: true });
+  const original = {
+    mcpServers: { unrelated: { command: "other-mcp", args: ["--keep"] } },
+    hostSetting: { preserve: true }
+  };
+  fs.writeFileSync(config, JSON.stringify(original, null, 2) + "\n");
+  const env = {
+    ...ENV,
+    HOME: home,
+    AHP_BIN_DIR: path.join(root, "bin"),
+    AHP_HOME: path.join(root, "store"),
+    QODER_APP: path.join(root, "no-qoder.app"),
+    QODER_CONFIG: path.join(home, ".qoder"),
+    QODER_CN_APP: path.join(root, "no-qoder-cn.app"),
+    QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+  };
+  const install = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "mcp", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(install.status, 0, install.stdout + install.stderr);
+  const registered = JSON.parse(fs.readFileSync(config, "utf8"));
+  assert.deepEqual(registered.hostSetting, original.hostSetting);
+  assert.deepEqual(registered.mcpServers.unrelated, original.mcpServers.unrelated);
+  assert.equal(registered.mcpServers["agent-handoff"].command, "node");
+  assert.equal(registered.mcpServers["agent-handoff"].args[0], path.join(REPO, "bin", "ahp-mcp"));
+  assert.equal(fs.existsSync(`${config}.ahp.lock`), false, "installer lock must always be released");
+
+  const uninstall = spawnSync("bash", [path.join(REPO, "install.sh"), "--uninstall", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(uninstall.status, 0, uninstall.stdout + uninstall.stderr);
+  const removed = JSON.parse(fs.readFileSync(config, "utf8"));
+  assert.deepEqual(removed, original, "uninstall leaves unrelated JSON untouched");
+  assert.equal(fs.existsSync(`${config}.ahp.lock`), false);
+
+  fs.writeFileSync(config, "{ invalid JSON\n");
+  const malformed = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "mcp", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(malformed.status, 0, malformed.stdout + malformed.stderr);
+  assert.equal(fs.readFileSync(config, "utf8"), "{ invalid JSON\n", "a malformed host configuration is never overwritten");
+  assert.equal(fs.existsSync(`${config}.ahp.lock`), false);
+});
+
 test("verify passes for the produced worklog", () => {
   const r = ahp(["verify"], A);
   assert.equal(r.code, 0, r.err);
