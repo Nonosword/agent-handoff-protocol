@@ -196,6 +196,7 @@ function stateFrom(g, gate, evidence) {
 }
 
 function requireProjectGit(proj) {
+  if (proj.operationRoot && git.isGitRepo(proj.operationRoot)) return proj.operationRoot;
   if (!proj.roots?.length && proj.source && proj.source.startsWith("explicit")) {
     // explicit project not tied to a checkout here: git-less operation
     return null;
@@ -206,6 +207,14 @@ function requireProjectGit(proj) {
 
 function laneTarget(proj, lane) {
   return { ...proj, laneProject: proj, lane, worklog: lane.worklog, lock: lane.lock };
+}
+
+function assertLaneWritable(proj) {
+  if (!proj.lane) return;
+  const current = lanes.find(proj.laneProject ?? proj, proj.lane.id);
+  if (!current || current.status === "archived") {
+    throw new Error(`Lane "${proj.lane.id}" is archived — edit its status or choose another Lane`);
+  }
 }
 
 function currentSessionPatch(entries) {
@@ -351,6 +360,10 @@ function cmdPickup(rest, home) {
     }
   }
   process.stdout.write(renderPickup({ project: proj, git: g, analysis, sinceCommits, reconcile, selfHistory, full: !!values.full }) + "\n");
+  if (analysis.validation.errors.length) {
+    process.stderr.write(`error: selected worklog has ${analysis.validation.errors.length} validation error(s); repair it before starting work\n`);
+    return 1;
+  }
   return 0;
 }
 
@@ -491,7 +504,7 @@ function cmdStart(rest, home) {
       sessionId: makeSessionId(full.worker, full.at, full.seq),
       ...(full.continuesFrom === undefined ? { continuesFrom: current.lastStart?.seq ?? null } : {})
     };
-  } });
+  }, precondition: () => assertLaneWritable(proj) });
   process.stdout.write(`handoff.start seq ${rec.seq} — baton taken by ${labelWorker(rec.worker)} at ${rec.base.commit.slice(0, 12)} (gate ${rec.base.gate}) · session ${rec.sessionId}\n`);
   if (rec.base.gate === "not-run") process.stdout.write("reminder: gate=not-run — run the project's gate and record the result in your first intent.promote\n");
   return 0;
@@ -522,6 +535,7 @@ function intentOpen(rest, home) {
     ...(values.scope?.length ? { scope: values.scope } : {})
   }, {
     precondition: (records) => {
+      assertLaneWritable(proj);
       assertCanOpen(records, values.id);
       assertBatonOwner(records, actor);
     },
@@ -552,6 +566,7 @@ function intentPromote(rest, home) {
     ...(values.next ? { next: values.next } : {})
   }, {
     precondition: (records) => {
+      assertLaneWritable(proj);
       assertCanPromote(records, { id: values.id, gate: values.gate, commits, landmines: values.landmine ?? [] });
       assertBatonOwner(records, actor);
     },
@@ -586,7 +601,7 @@ function cmdEnd(rest, home) {
     summary: values.summary,
     ...(findings.length ? { findings } : {})
   }, {
-    precondition: (records) => assertBatonOwner(records, actor),
+    precondition: (records) => { assertLaneWritable(proj); assertBatonOwner(records, actor); },
     derive: (_full, entries) => {
       const state = projectState(entries.map((entry) => entry.record));
       return { ...currentSessionPatch(entries), openIntents: state.openIntents.map((intent) => intent.intentId) };

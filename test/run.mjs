@@ -354,6 +354,45 @@ test("installer appends a Codex shell-env table when absent and defers an inline
   assert.match(inline.r.stdout, /inline shell env/);
 });
 
+test("installer preserves legal TOML comments, literal strings, and user-owned identity values", () => {
+  const root = path.join(TMP, "installer-config-edge-cases");
+  const makeEnv = (name) => {
+    const home = path.join(root, name);
+    return {
+      ...ENV, HOME: home, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      AHP_BIN_DIR: path.join(root, name, "bin"), AHP_HOME: path.join(root, name, "store"),
+      QODER_APP: path.join(root, "no.app"), QODER_CONFIG: path.join(home, ".qoder"),
+      QODER_CN_APP: path.join(root, "no.app"), QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+    };
+  };
+  for (const [name, seed] of Object.entries({
+    header: '[shell_environment_policy.set] # valid comment\nAHP_WORKER_ID = "custom"\n',
+    value: '[shell_environment_policy.set]\nAHP_WORKER_ID = "custom" # valid comment\n',
+    literal: "[shell_environment_policy.set]\nAHP_WORKER_ID = 'custom'\n"
+  })) {
+    const env = makeEnv(name);
+    const config = path.join(env.HOME, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    fs.writeFileSync(config, seed);
+    const install = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "cli", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+    assert.equal(install.status, 0, install.stdout + install.stderr);
+    const written = fs.readFileSync(config, "utf8");
+    assert.equal((written.match(/\[shell_environment_policy\.set\]/g) ?? []).length, 1);
+    assert.equal((written.match(/^AHP_WORKER_ID\s*=/gm) ?? []).length, 1);
+  }
+
+  const env = makeEnv("user-owned-json");
+  const settings = path.join(env.HOME, ".claude", "settings.json");
+  fs.mkdirSync(path.dirname(settings), { recursive: true });
+  fs.writeFileSync(settings, JSON.stringify({ env: { AHP_WORKER_ID: "claude", AHP_MODEL: "claude", AHP_RUNTIME: "claude-code" } }));
+  assert.equal(spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "cli", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false }).status, 0);
+  const changed = JSON.parse(fs.readFileSync(settings, "utf8"));
+  changed.env.AHP_WORKER_ID = "my-custom-worker";
+  fs.writeFileSync(settings, JSON.stringify(changed));
+  assert.equal(spawnSync("bash", [path.join(REPO, "install.sh"), "--uninstall", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false }).status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(settings, "utf8")).env.AHP_WORKER_ID, "my-custom-worker");
+});
+
 test("verify passes for the produced worklog", () => {
   const r = ahp(["verify"], A);
   assert.equal(r.code, 0, r.err);
@@ -567,6 +606,45 @@ test("explicit --project works without cwd detection", () => {
   const r = ahp(["status", "--project", "manual-xyz"], os.tmpdir());
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /manual-xyz/);
+});
+
+test("Project ids do not merge punctuation-colliding remotes and --cwd selects its checkout", () => {
+  const one = mkrepo("remote-collision-one");
+  const two = mkrepo("remote-collision-two");
+  sh("git", ["remote", "add", "origin", "https://example.invalid/team/a_b.git"], one);
+  sh("git", ["remote", "add", "origin", "https://example.invalid/team/a-b.git"], two);
+  assert.equal(ahp(["project", "add"], one).code, 0);
+  const twoAdd = ahp(["project", "add"], two);
+  assert.equal(twoAdd.code, 0, twoAdd.err);
+  const ids = ahp(["project", "list"], one).out.split("\n").filter((line) => /remote-collision/.test(line)).map((line) => line.match(/\[([^\]]+)\]/)[1]);
+  assert.equal(new Set(ids).size, 2, "distinct remotes must get distinct Project ids");
+
+  const checkout = path.join(TMP, "remote-collision-checkout");
+  assert.equal(sh("git", ["clone", "-q", one, checkout], TMP).code, 0);
+  sh("git", ["config", "user.email", "t@t"], checkout); sh("git", ["config", "user.name", "t"], checkout);
+  commit(checkout, "checkout-only");
+  const expected = sh("git", ["rev-parse", "HEAD"], checkout).out;
+  fs.writeFileSync(path.join(checkout, "dirty"), "yes");
+  const status = ahp(["status", "--json", "--cwd", checkout], os.tmpdir());
+  assert.equal(status.code, 0, status.err);
+  const view = JSON.parse(status.out);
+  assert.equal(view.git.head, expected);
+  assert.equal(view.git.clean, false);
+});
+
+test("append repairs an unterminated valid JSONL record and rejects invalid writer input", () => {
+  const P = mkrepo("append-boundary");
+  assert.equal(ahp(["start", "--plan", "p", "--gate", "pass", "--evidence", "e"], P).code, 0);
+  const file = ahp(["path"], P).out;
+  fs.writeFileSync(file, fs.readFileSync(file, "utf8").trimEnd());
+  const end = ahp(["end", "--reason", "task-done", "--summary", "s", "--gate", "pass", "--evidence", "e"], P);
+  assert.equal(end.code, 0, end.err);
+  assert.equal(ahp(["verify"], P).code, 0);
+  const restarted = ahp(["start", "--plan", "p", "--gate", "pass", "--evidence", "e"], P);
+  assert.equal(restarted.code, 0, restarted.err);
+  const invalid = ahp(["intent", "open", "--id", "x".repeat(81), "--title", "t", "--intended", "i"], P);
+  assert.equal(invalid.code, 1);
+  assert.match(invalid.err, /refusing to append an invalid worklog record/);
 });
 
 test("compact archives old sessions and keeps recent + open intents", () => {
@@ -801,6 +879,13 @@ test("dashboard watch is event-driven, redraws only changed rows, and consumes t
   writes.length = 0;
   drawFrame(out, "one\n", first);
   assert.deepEqual(writes, ["\x1b[2;1H\x1b[2K"]);
+
+  const narrowWrites = [];
+  const narrow = { columns: 8, rows: 2, write: (value) => narrowWrites.push(value) };
+  const narrowFrame = drawFrame(narrow, "123456789\nsecond\nthird\n");
+  assert.equal(narrowFrame.length, 2, "a short terminal must not scroll the alternate screen");
+  assert.match(narrowWrites[0], /1234567…/);
+  assert.doesNotMatch(narrowWrites[0], /\x1b\[3;/);
 });
 
 test("dashboard store watcher wakes on a local filesystem event", () => {
@@ -826,6 +911,27 @@ test("dashboard store watcher wakes on a local filesystem event", () => {
     encoding: "utf8",
     shell: false,
     timeout: 3000
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "changed");
+});
+
+test("dashboard watcher survives startup before its store directory exists", () => {
+  const parent = path.join(TMP, "dashboard-missing-store-parent");
+  const home = path.join(parent, "store");
+  fs.mkdirSync(parent, { recursive: true });
+  const dashboardModule = pathToFileURL(path.join(REPO, "src", "dashboard.mjs")).href;
+  const source = `
+    import fs from "node:fs";
+    import { storeWatcher } from ${JSON.stringify(dashboardModule)};
+    const home = process.env.AHP_WATCH_TEST_HOME;
+    let close = () => {};
+    close = storeWatcher(home, () => { close(); process.stdout.write("changed\\n"); process.exit(0); });
+    setTimeout(() => { fs.mkdirSync(home); fs.writeFileSync(home + "/projects.json", "{}\\n"); }, 25);
+    setTimeout(() => process.exit(2), 2000);
+  `;
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+    cwd: REPO, env: { ...ENV, AHP_WATCH_TEST_HOME: home }, encoding: "utf8", shell: false, timeout: 3000
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), "changed");
@@ -883,6 +989,21 @@ test("MCP desktop callers need explicit project context when the server cwd is n
   assert.equal(byId.get(4).result.isError, false, byId.get(4).result.content[0].text);
   assert.equal(byId.get(5).result.isError, true);
   assert.match(byId.get(5).result.content[0].text, /must be an absolute path/);
+});
+
+test("MCP accepts the documented AHP_PROJECT context outside a checkout", () => {
+  const P = mkrepo("mcp-env-project");
+  assert.equal(ahp(["start", "--plan", "p", "--gate", "pass", "--evidence", "e"], P).code, 0);
+  const current = ahp(["project", "current"], P).out;
+  const projectId = current.match(/\[([^\]]+)\]/)[1];
+  const messages = [
+    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ahp_status", arguments: {} } }
+  ].map(JSON.stringify).join("\n") + "\n";
+  const result = spawnSync(process.execPath, [MCP], {
+    cwd: os.tmpdir(), input: messages, env: { ...ENV, AHP_PROJECT: projectId }, encoding: "utf8", shell: false
+  });
+  const reply = JSON.parse(result.stdout.trim());
+  assert.equal(reply.result.isError, false, reply.result.content[0].text);
 });
 
 test("MCP array args (commits/refs/landmines/findings) reach the CLI", () => {

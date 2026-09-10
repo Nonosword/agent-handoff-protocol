@@ -17,15 +17,11 @@ export function colors({ on = process.stdout.isTTY && !process.env.NO_COLOR } = 
   };
 }
 
-function ago(iso) {
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms)) return "?";
-  const minutes = Math.round(ms / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
+function timestamp(iso) {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return "?";
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function workerLabel(worker) {
@@ -63,7 +59,9 @@ function gatherLane(lane) {
   let readError = null;
   try { analysis = analyze(readEntries(lane.worklog)); }
   catch (error) { readError = error.message; }
-  return { ...lane, analysis, readError, updated: fileMeta(lane.worklog).updated };
+  // File mtime changes during maintenance/copying and is not a handoff event.
+  // The final record's protocol timestamp remains meaningful without polling.
+  return { ...lane, analysis, readError, updated: analysis?.records.at(-1)?.at ?? null };
 }
 
 function gatherProject(entry) {
@@ -95,6 +93,7 @@ function toJson(rows, version, home) {
       root: row.root,
       branch: row.head.branch,
       head: row.head.short,
+      error: row.laneError,
       lanes: row.lanes.map((lane) => ({
         id: lane.id,
         title: lane.title,
@@ -147,7 +146,7 @@ function render(rows, home, { footer = "", version = null } = {}) {
 
     for (const lane of row.lanes) {
       const a = lane.analysis;
-      const laneName = `${lane.id} · ${lane.title}`;
+      const laneName = lane.title;
       if (lane.readError) {
         anyError = true;
         out.push(`    ${c.err("✗")} ${c.bold(laneName)}  ${lane.readError}`);
@@ -158,12 +157,15 @@ function render(rows, home, { footer = "", version = null } = {}) {
         continue;
       }
       if (a.batonHeld) {
-        out.push(`    ${c.held("●")} ${c.bold(laneName)}  held by ${c.bold(workerLabel(a.batonWorker))}  ${c.subtle(ago(a.lastStart.at))}`);
+        out.push(`    ${c.held("●")} ${c.bold(laneName)}  held by ${c.bold(workerLabel(a.batonWorker))} since ${c.subtle(timestamp(a.lastStart.at))}`);
         if (a.lastStart.plan) out.push(`      ${c.subtle(a.lastStart.plan.slice(0, 92))}`);
       } else {
         out.push(`    ${c.free("○")} ${c.bold(laneName)}  ${c.subtle("baton free")}`);
       }
-      out.push(`      ${c.subtle(`${a.count} records · seq ${a.lastSeq} · ${a.promotes.length} promoted · ${a.openIntents.length} open${lane.updated ? ` · ${ago(lane.updated)}` : ""}`)}`);
+      const details = [`${a.count} records`, `seq ${a.lastSeq}`, `${a.promotes.length} promoted`];
+      if (a.openIntents.length) details.push(`${a.openIntents.length} open`);
+      if (lane.updated) details.push(timestamp(lane.updated));
+      out.push(`      ${c.subtle(details.join(" · "))}`);
       if (a.validation.errors.length || a.validation.warnings.length) {
         anyError = true;
         out.push(`      ${c.warn(`⚠ verify: ${a.validation.errors.length} error(s), ${a.validation.warnings.length} warning(s)`)}`);
@@ -213,49 +215,62 @@ function changeSignal() {
   };
 }
 
-export function storeWatcher(home, notify) {
+export function storeWatcher(home, notify, onError = () => {}) {
   const watchers = [];
-  let rearmQueued = false;
+  let rearmTimer = null;
+  let closed = false;
   const closeAll = () => {
     while (watchers.length) watchers.pop().close();
   };
+  const scheduleRearm = () => {
+    if (closed || rearmTimer !== null) return;
+    // Filesystem backends often emit a burst for one atomic replacement.
+    // Coalesce it without introducing a periodic fetch or repaint timer.
+    rearmTimer = setTimeout(() => {
+      rearmTimer = null;
+      arm();
+    }, 25);
+  };
   const arm = () => {
+    if (closed) return;
     closeAll();
-    const directories = [home];
+    let root = home;
+    while (!fs.existsSync(root) && path.dirname(root) !== root) root = path.dirname(root);
+    // If the store has not been created yet, watch its nearest existing parent.
+    // Once creation is observed, the next arm descends only into the store.
+    const directories = root === home ? [home] : [root];
     for (let index = 0; index < directories.length; index += 1) {
       const dir = directories[index];
       try {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
           if (entry.isDirectory()) directories.push(path.join(dir, entry.name));
         }
-      } catch { continue; }
+      } catch (error) { onError(`cannot read ${dir}: ${error.message}`); continue; }
       try {
         const watcher = fs.watch(dir, () => {
+          if (closed) return;
           notify();
-          // A Lane directory may have appeared or been atomically replaced.
-          // Re-arm from the tree after the current event turn; this remains
-          // event-driven and does not poll the store.
-          if (!rearmQueued) {
-            rearmQueued = true;
-            queueMicrotask(() => { rearmQueued = false; arm(); });
-          }
+          scheduleRearm();
         });
         // A directory can disappear while its watcher is active. Treat that
         // as a change and re-arm from the remaining tree instead of allowing
         // an unhandled EventEmitter error to terminate the dashboard.
         watcher.on("error", () => {
+          if (closed) return;
+          onError(`watch error at ${dir}`);
           notify();
-          if (!rearmQueued) {
-            rearmQueued = true;
-            queueMicrotask(() => { rearmQueued = false; arm(); });
-          }
+          scheduleRearm();
         });
         watchers.push(watcher);
-      } catch { /* unreadable or vanished directories are skipped */ }
+      } catch (error) { onError(`cannot watch ${dir}: ${error.message}`); }
     }
   };
   arm();
-  return closeAll;
+  return () => {
+    closed = true;
+    if (rearmTimer !== null) clearTimeout(rearmTimer);
+    closeAll();
+  };
 }
 
 function frameLines(frame) {
@@ -266,13 +281,46 @@ function frameLines(frame) {
   return lines;
 }
 
+function displayWidth(value) {
+  const plain = value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  let width = 0;
+  for (const char of plain) {
+    const code = char.codePointAt(0);
+    if (code === 0 || (code >= 0x300 && code <= 0x36f)) continue;
+    width += (code >= 0x1100 && (code <= 0x115f || code >= 0x2e80)) ? 2 : 1;
+  }
+  return width;
+}
+
+function truncateLine(value, width) {
+  if (!Number.isFinite(width) || displayWidth(value) <= width) return value;
+  const limit = Math.max(1, width - 1);
+  let visible = 0;
+  let out = "";
+  for (let index = 0; index < value.length;) {
+    const ansi = value.slice(index).match(/^\x1b\[[0-?]*[ -/]*[@-~]/);
+    if (ansi) { out += ansi[0]; index += ansi[0].length; continue; }
+    const point = value.codePointAt(index);
+    const char = String.fromCodePoint(point);
+    const charWidth = point === 0 || (point >= 0x300 && point <= 0x36f) ? 0 : (point >= 0x1100 && (point <= 0x115f || point >= 0x2e80) ? 2 : 1);
+    if (visible + charWidth > limit) break;
+    out += char;
+    visible += charWidth;
+    index += char.length;
+  }
+  return `${out}…\x1b[0m`;
+}
+
 export function drawFrame(out, frame, previous = null) {
-  const lines = frameLines(frame);
+  const width = Number.isInteger(out.columns) ? Math.max(1, out.columns) : Infinity;
+  const height = Number.isInteger(out.rows) ? Math.max(1, out.rows) : Infinity;
+  let lines = frameLines(frame).map((line) => truncateLine(line, width));
+  if (lines.length > height) lines = [...lines.slice(0, Math.max(0, height - 1)), `  … ${lines.length - height + 1} more row(s); enlarge terminal`];
   if (previous === null) {
     // The first paint owns a fresh alternate screen, so clearing it once is
     // both safe and useful. Subsequent paints must not clear the whole screen:
     // a one-second countdown should touch only its footer row.
-    out.write(`\x1b[H\x1b[2J${frame}`);
+    out.write(`\x1b[H\x1b[2J${lines.join("\n")}${lines.length ? "\n" : ""}`);
     return lines;
   }
 
@@ -289,8 +337,9 @@ export function drawFrame(out, frame, previous = null) {
 
 export async function dashboard({ home, version = null, json = false, watch = false } = {}) {
   if (json) {
-    process.stdout.write(`${JSON.stringify(toJson(snapshot(home), version, home), null, 2)}\n`);
-    return 0;
+    const rows = snapshot(home);
+    process.stdout.write(`${JSON.stringify(toJson(rows, version, home), null, 2)}\n`);
+    return rows.some((row) => row.laneError || row.lanes.some((lane) => lane.readError || lane.analysis?.validation.errors.length)) ? 1 : 0;
   }
 
   if (!watch || !process.stdout.isTTY) {
@@ -327,11 +376,12 @@ export async function dashboard({ home, version = null, json = false, watch = fa
   try {
     let key = fingerprint(home);
     let rows = snapshot(home);
-    let updatedAt = new Date().toTimeString().slice(0, 8);
+    let updatedAt = timestamp(new Date().toISOString());
     let previousFrame = null;
-    closeWatcher = storeWatcher(home, () => signal.notify());
+    let watchError = null;
+    closeWatcher = storeWatcher(home, () => signal.notify(), (message) => { watchError = message; });
     while (running) {
-      const frame = render(rows, home, { version, footer: `updated at ${updatedAt}` });
+      const frame = render(rows, home, { version, footer: `${watchError ? `watch: ${watchError} · ` : ""}updated at ${updatedAt}` });
       previousFrame = drawFrame(out, frame.text, previousFrame);
       await signal.wait();
       if (!running) break;
@@ -340,7 +390,7 @@ export async function dashboard({ home, version = null, json = false, watch = fa
       if (next === key) continue;
       key = next;
       rows = snapshot(home);
-      updatedAt = new Date().toTimeString().slice(0, 8);
+      updatedAt = timestamp(new Date().toISOString());
     }
   } finally {
     closeWatcher();

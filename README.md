@@ -143,12 +143,16 @@ From **anywhere** — every project at a glance:
 ```sh
 ahp dashboard       # every Project/Lane: baton, plan, open intents, verify,
                     # plus branch and short HEAD (no working-tree/log scan)
-ahp dashboard -w    # redraw immediately when local AHP state changes; ctrl-c to exit
+ahp dashboard -w    # redraw on local AHP state changes; fixed timestamps need no polling
 ahp dashboard --json
 ```
 
 
 Dashboard uses neutral ANSI-256 grey `38;5;248` for auxiliary text, so Tabby does not depend on its unusually dark ANSI bright-black mapping. Separator rules remain a separate ANSI `90` token, preserving their lower visual weight.
+
+The interactive view shows the human-readable Lane title; its stable slug remains
+available to CLI/MCP callers and JSON. A baton dot and open-intent count are
+separate state: `0 open` is omitted, while a positive count remains visible.
 
 ## Records
 

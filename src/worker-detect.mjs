@@ -51,13 +51,17 @@ function knownId(s) {
 }
 
 // Fold a worker (string, or `{id, model, runtime}`) to its canonical id. For the
-// object form, the first of id / model / runtime that names a known agent wins;
-// otherwise the id keeps its own sanitised name. Unknown agents are not
+// object form, an explicit id always wins; model/runtime classify only when no
+// concrete worker id was provided. Unknown agents are not
 // collapsed to "unknown" — only a genuinely absent identity is.
 export function canonicalWorkerId(raw) {
   if (raw == null) return "unknown";
   if (typeof raw === "object") {
-    for (const cand of [raw.id, raw.model, raw.runtime]) {
+    if (typeof raw.id === "string" && norm(raw.id) !== "") {
+      const explicit = norm(raw.id);
+      return knownId(explicit) ?? sanitise(explicit);
+    }
+    for (const cand of [raw.model, raw.runtime]) {
       const k = knownId(norm(cand));
       if (k) return k;
     }

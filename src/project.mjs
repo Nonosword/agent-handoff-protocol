@@ -104,7 +104,10 @@ export function resolve({ cwd = process.cwd(), project = null, env = process.env
 
   if (want) {
     const hit = findInRegistry(registry, want);
-    if (hit) return descriptor(hit.id, hit.entry, home, { source: "explicit" });
+    if (hit) return descriptor(hit.id, hit.entry, home, {
+      source: "explicit",
+      operationRoot: matchingCheckout(hit.entry, cwd)
+    });
     // allow an explicit id that isn't registered yet only if it's clean
     if (/^[a-z0-9][a-z0-9._-]*$/i.test(want)) {
       return descriptor(want, { name: want, remote: null, roots: [] }, home, { source: "explicit-unregistered" });
@@ -118,24 +121,48 @@ export function resolve({ cwd = process.cwd(), project = null, env = process.env
   }
   // match registry by id, remote or a known root
   for (const [id, entry] of Object.entries(registry.projects)) {
-    if (id === ident.id) return descriptor(id, entry, home, { source: "git" });
+    // A slug is intentionally human-readable, not a globally unique remote
+    // identity. Never let a punctuation/length collision silently join two
+    // remotes into one worklog. Old registries retain their ids when the remote
+    // itself matches; a conflicting remote receives a suffixed id on register.
+    if (id === ident.id && sameRemote(entry, ident)) return descriptor(id, entry, home, { source: "git", operationRoot: ident.root });
     if (ident.normRemote && entry.remote && git.normalizeRemote(entry.remote) === ident.normRemote) {
-      return descriptor(id, entry, home, { source: "git-remote" });
+      return descriptor(id, entry, home, { source: "git-remote", operationRoot: ident.root });
     }
-    if ((entry.roots ?? []).includes(ident.root)) return descriptor(id, entry, home, { source: "git-path" });
+    if ((entry.roots ?? []).includes(ident.root)) return descriptor(id, entry, home, { source: "git-path", operationRoot: ident.root });
   }
   // Read-only commands can derive the stable descriptor without touching the
   // registry. The first write command will persist the same identity.
   if (!registerMissing) {
-    return descriptor(ident.id, {
+    return descriptor(availableId(registry, ident), {
       name: ident.name,
       remote: ident.remote,
       roots: [ident.root],
       created: null
-    }, home, { source: "git-unregistered" });
+    }, home, { source: "git-unregistered", operationRoot: ident.root });
   }
   // unregistered but in a repo: auto-register before writing
   return register({ cwd, home, name: ident.name, autoreg: true });
+}
+
+function sameRemote(entry, ident) {
+  // A remote-less project is identified by its checkout root. For a remote
+  // project, equality must be based on the normalized remote, not its slug.
+  if (ident.normRemote) return !!entry.remote && git.normalizeRemote(entry.remote) === ident.normRemote;
+  return (entry.roots ?? []).includes(ident.root);
+}
+
+function matchingCheckout(entry, cwd) {
+  const ident = identify(cwd);
+  return ident && sameRemote(entry, ident) ? ident.root : null;
+}
+
+function availableId(registry, ident) {
+  if (!registry.projects[ident.id] || sameRemote(registry.projects[ident.id], ident)) return ident.id;
+  // Keep the old concise id for every existing project. A deterministic suffix
+  // only appears for the previously ambiguous collision case.
+  const suffix = shortHash(ident.normRemote ?? ident.root);
+  return `${ident.id.slice(0, Math.max(1, 80 - suffix.length - 1))}-${suffix}`;
 }
 
 function findInRegistry(registry, want) {
@@ -164,6 +191,7 @@ function descriptor(id, entry, home, meta) {
     worklog: worklogPath(id, home),
     lock: lockPath(id, home),
     source: meta.source,
+    operationRoot: meta.operationRoot ?? null,
     registered: !["explicit-unregistered", "git-unregistered"].includes(meta.source)
   };
 }
@@ -173,17 +201,18 @@ export function register({ cwd = process.cwd(), home, name = null, autoreg = fal
   const ident = identify(cwd);
   if (!ident) throw new Error("not inside a Git repository");
   return mutateRegistry(home, (registry) => {
-    const existing = registry.projects[ident.id] ?? { roots: [] };
+    const id = availableId(registry, ident);
+    const existing = registry.projects[id] ?? { roots: [] };
     const entryName = name ?? existing.name ?? ident.name;
-    assertNameAvailable(registry, entryName, ident.id);
+    assertNameAvailable(registry, entryName, id);
     const entry = {
       name: entryName,
       remote: ident.remote ?? existing.remote ?? null,
       roots: [...new Set([...(existing.roots ?? []), ident.root])],
       created: existing.created ?? new Date().toISOString()
     };
-    registry.projects[ident.id] = entry;
-    return { ...descriptor(ident.id, entry, home, { source: autoreg ? "autoregistered" : "registered" }), autoreg };
+    registry.projects[id] = entry;
+    return { ...descriptor(id, entry, home, { source: autoreg ? "autoregistered" : "registered", operationRoot: ident.root }), autoreg };
   });
 }
 

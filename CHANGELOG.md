@@ -7,6 +7,12 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.6.0 — 2026-09-10
+
+- Closed review findings across Project identity, append-only worklogs, host
+  configuration, MCP context and the Dashboard. See the release note for the
+  compatibility and verification details.
+
 ## 0.5.2 — 2026-09-08
 
 - Split Qoder and Qoder CN into independently reported installer hosts. Each

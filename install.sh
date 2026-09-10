@@ -265,8 +265,9 @@ function acquireLock() {
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
       try {
-        const pid = Number.parseInt(fs.readFileSync(lock, "utf8").split("\n", 1)[0], 10);
-        if (!ownerAlive(pid)) { fs.rmSync(lock, { force: true }); continue; }
+        const pidLine = fs.readFileSync(lock, "utf8").split("\n", 1)[0];
+        const pid = /^\d+$/.test(pidLine) ? Number(pidLine) : NaN;
+        if (Number.isInteger(pid) && pid > 0 && !ownerAlive(pid)) { fs.rmSync(lock, { force: true }); continue; }
       } catch { /* an unreadable lock is never safe to reclaim */ }
       sleep(20);
     } finally {
@@ -282,7 +283,7 @@ function releaseLock({ lock, token }) {
 }
 
 let entry;
-if (op === "set") {
+if (op === "set" || op === "delete-if-equal") {
   try { entry = JSON.parse(entryJson); }
   catch { console.error("invalid MCP server JSON"); process.exit(1); }
 }
@@ -296,8 +297,12 @@ try {
     const doc = before.doc;
     if (!doc[key] || typeof doc[key] !== "object" || Array.isArray(doc[key])) doc[key] = {};
     let result;
-    if (op === "delete") {
+    if (op === "delete" || op === "delete-if-equal") {
       if (!(name in doc[key])) { output = "absent"; break; }
+      if (op === "delete-if-equal" && JSON.stringify(doc[key][name]) !== JSON.stringify(entry)) {
+        output = "preserved";
+        break;
+      }
       delete doc[key][name];
       result = "removed";
     } else {
@@ -380,13 +385,15 @@ identity_json() {          # host file id model runtime
                      || skip "$host worker identity" "current"
 }
 
-identity_json_remove() {  # host file
-  local host="$1" file="$2" any=0 r k
+identity_json_remove() {  # host file id model runtime
+  local host="$1" file="$2" any=0 r k expected
   [ -f "$file" ] || { skip "no worker identity" "$host"; return 0; }
   if [ "$DRY" = 1 ]; then dry "remove worker identity" "$file"; return 0; fi
-  for k in AHP_WORKER_ID AHP_MODEL AHP_RUNTIME; do
-    r=$(json_mcp_op delete "$file" env "$k" 2>&1) || r="error: $r"
-    case "$r" in removed) any=1 ;; absent) : ;;
+  set -- "AHP_WORKER_ID=$3" "AHP_MODEL=$4" "AHP_RUNTIME=$5"
+  for expected in "$@"; do
+    k="${expected%%=*}"
+    r=$(json_mcp_op delete-if-equal "$file" env "$k" "\"${expected#*=}\"" 2>&1) || r="error: $r"
+    case "$r" in removed) any=1 ;; absent|preserved) : ;;
       parse_error) warn "$host settings not valid JSON" "$file — left as-is"; return 0 ;;
     esac
   done
@@ -408,12 +415,16 @@ let text = "";
 try { text = fs.readFileSync(file, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; }
 const nl = text.includes("\r\n") ? "\r\n" : "\n";
 let lines = text.length ? text.split(/\r?\n/) : [];
-const headerRe = /^\s*\[\s*([^\]]+?)\s*\]\s*$/;
+// TOML permits a trailing comment after a table header. Treat it as the same
+// table rather than appending a duplicate declaration.
+const headerRe = /^\s*\[\s*([^\]]+?)\s*\](?:\s*#.*)?\s*$/;
 // normalise a header so `["shell_environment_policy"."set"]` and the bare form
 // compare equal — `codex mcp add` writes the bare form but a hand-edit may not.
 const norm = (t) => t.replace(/"([^"]*)"/g, "$1").replace(/\s+/g, "");
 const table = (i) => { const m = lines[i].match(headerRe); return m ? norm(m[1]) : null; };
-const keyLineRe = (k) => new RegExp('^(\\s*)' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s*=\\s*)"([^"]*)"(\\s*)$');
+// Support ordinary single- and double-quoted scalar values and retain a
+// trailing comment. Unsupported target syntax is never mistaken for absent.
+const keyLineRe = (k) => new RegExp("^(\\s*)" + k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\s*=\\s*)(?:\"([^\"\\\\]*)\"|'([^'\\\\]*)')(\\s*(?:#.*)?)$");
 
 // An inline `set = { ... }` under [shell_environment_policy] is a shape this
 // surgery will not touch — report it so the installer prints a manual snippet.
@@ -436,19 +447,29 @@ if (op === "delete") {
   const kept = [];
   for (let i = 0; i < lines.length; i++) {
     if (i > start && i < end) {
-      const hit = want.find(([k, v]) => { const m = lines[i].match(keyLineRe(k)); return m && m[3] === v; });
+      const hit = want.find(([k, v]) => { const m = lines[i].match(keyLineRe(k)); return m && (m[3] ?? m[4]) === v; });
       if (hit) { changed = true; continue; }
     }
     kept.push(lines[i]);
   }
   lines = kept;
 } else {
+  // Do not append a second key when a valid-but-more-complex TOML spelling is
+  // already present. Report manual intervention instead of corrupting config.
+  for (const [k] of want) {
+    const keyStartRe = new RegExp('^\\s*' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*=');
+    for (let i = start + 1; i < end; i++) {
+      if (start !== -1 && keyStartRe.test(lines[i]) && !lines[i].match(keyLineRe(k))) {
+        console.log("manual"); process.exit(0);
+      }
+    }
+  }
   const add = [];
   for (const [k, v] of want) {
     let found = false;
     for (let i = start + 1; i < end; i++) {
       const m = start !== -1 && lines[i] ? lines[i].match(keyLineRe(k)) : null;
-      if (m) { found = true; if (m[3] !== v) { lines[i] = `${m[1]}${k}${m[2]}"${v}"${m[4]}`; changed = true; } break; }
+      if (m) { found = true; if ((m[3] ?? m[4]) !== v) { lines[i] = `${m[1]}${k}${m[2]}"${v}"${m[5]}`; changed = true; } break; }
     }
     if (!found) add.push(`${k} = "${v}"`);
   }
@@ -558,7 +579,7 @@ if [ "$UNINSTALL" = 1 ]; then
   json_mcp_unregister "Windsurf" "$WINDSURF_MCP" mcpServers
 
   section "Worker identity"
-  identity_json_remove "Claude Code" "$CLAUDE_SETTINGS"
+  identity_json_remove "Claude Code" "$CLAUDE_SETTINGS" claude claude claude-code
   identity_toml_remove "Codex" "$CODEX_CONFIG_TOML" codex codex codex
 
   printf '\n  %sThe store at %s was left intact.%s\n\n' "$DIM" "$STORE" "$R"

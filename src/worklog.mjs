@@ -68,9 +68,11 @@ export function acquireLock(lockFile) {
       let stale = false;
       try {
         const [pidLine] = fs.readFileSync(lockFile, "utf8").split("\n");
-        const pid = Number.parseInt(pidLine, 10);
-        const alive = pidAlive(pid);
-        if (!alive) stale = true;
+        const pid = /^\d+$/.test(pidLine) ? Number(pidLine) : NaN;
+        // An empty file is observable between exclusive creation and the first
+        // write. It is an initializing owner, not proof of a dead one. Reclaim
+        // only a syntactically valid PID that we can prove is gone.
+        if (Number.isInteger(pid) && pid > 0 && !pidAlive(pid)) stale = true;
       } catch { /* unreadable/invalid locks are not safe to reclaim */ }
       if (stale) { try { fs.rmSync(lockFile, { force: true }); } catch { /* race */ } continue; }
       sleepMs(20);
@@ -131,10 +133,27 @@ export function writeFileAtomic(file, text) {
     fs.closeSync(fd);
     fd = undefined;
     fs.renameSync(tmp, file);
+    // fsyncing the replacement alone does not make the directory entry durable
+    // on filesystems that require the containing directory to be synced too.
+    syncDirectory(dir);
   } catch (error) {
     if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* best effort */ } }
     try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
     throw error;
+  }
+}
+
+function syncDirectory(dir) {
+  let fd;
+  try {
+    fd = fs.openSync(dir, "r");
+    fs.fsyncSync(fd);
+  } catch {
+    // Some platforms do not permit opening/fsyncing a directory. The file
+    // replacement itself remains atomic; this is the strongest portable best
+    // effort available without turning a successful replacement into an error.
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* best effort */ }
   }
 }
 
@@ -160,8 +179,12 @@ export function appendRecord(worklogFile, lockFile, record, { now = () => new Da
 
 function appendUnderLock(worklogFile, record, { now, precondition, derive, lockFile, lockToken }) {
   try {
+    let text;
     let entries;
-    try { entries = readEntries(worklogFile); }
+    try {
+      text = readText(worklogFile);
+      entries = parseJsonl(text);
+    }
     catch (e) { throw new Error(`worklog is corrupt (${e.message}); fix it before appending`); }
     const prevSeq = entries.length ? entries[entries.length - 1].record.seq : 0;
     const full = { ...record };
@@ -173,6 +196,10 @@ function appendUnderLock(worklogFile, record, { now, precondition, derive, lockF
     const records = entries.map((entry) => entry.record);
     if (precondition) precondition(records, full);
     if (derive) Object.assign(full, derive(full, entries));
+    const validation = validateRecords([...entries, { record: full, no: entries.length + 1 }]);
+    if (validation.errors.length) {
+      throw new Error(`refusing to append an invalid worklog record:\n${validation.errors.join("\n")}`);
+    }
     const line = `${JSON.stringify(full)}\n`;
     let fd;
     let writeStarted = false;
@@ -181,6 +208,10 @@ function appendUnderLock(worklogFile, record, { now, precondition, derive, lockF
       // Once a descriptor is open for append, a failed full-write may already
       // have placed a prefix on disk; never tell a caller it is safe to retry.
       writeStarted = true;
+      // JSONL permits a final line without a terminal newline, but appending
+      // after it without a delimiter would concatenate two JSON values. Keep
+      // the historic record byte-for-byte and add only the missing separator.
+      if (text && !text.endsWith("\n")) writeAllSync(fd, "\n");
       writeAllSync(fd, line);
       fs.fsyncSync(fd);
     } catch (error) {

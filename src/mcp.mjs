@@ -169,13 +169,17 @@ function assertToolArguments(name, args) {
 }
 
 function projectContextError(args) {
+  // Project selection has precedence over cwd in the CLI too. A desktop host
+  // may retain an irrelevant relative cwd while supplying the stable project
+  // id, so do not reject the otherwise valid explicit selection.
+  if (args.project || process.env.AHP_PROJECT) return null;
   if (args.cwd) {
     if (!path.isAbsolute(args.cwd)) {
       return 'tools/call argument "cwd" must be an absolute path inside the target Git repository';
     }
     return null;
   }
-  if (args.project || git.isGitRepo(process.cwd())) return null;
+  if (git.isGitRepo(process.cwd())) return null;
   return (
     `AHP MCP is running outside a Git repository (${process.cwd()}). ` +
     'Pass the target checkout as an absolute "cwd" argument, or pass its registered "project" id/name. ' +

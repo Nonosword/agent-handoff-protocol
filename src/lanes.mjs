@@ -87,7 +87,7 @@ function saveFile(project, data) {
   }
 }
 
-function mutateFile(project, operation) {
+function mutateFile(project, operation, { worklogLock = null } = {}) {
   const lock = path.join(project.dir, ".lanes.lock");
   let token;
   try {
@@ -99,13 +99,19 @@ function mutateFile(project, operation) {
       effect: "No Lane was changed. A live writer is retried briefly; a dead or stale lock is reclaimed automatically."
     });
   }
+  let worklogToken;
   try {
+    // Status transitions that depend on baton state hold both locks until the
+    // registry replacement is published. Writers take only the worklog lock
+    // and re-check the status there, which closes archive/start interleavings.
+    if (worklogLock) worklogToken = acquireLock(worklogLock);
     const data = loadFile(project);
     const result = operation(data);
     validateFile(data);
     saveFile(project, data);
     return result;
   } finally {
+    if (worklogLock) releaseLock(worklogLock, worklogToken);
     releaseLock(lock, token);
   }
 }
@@ -219,7 +225,7 @@ export function edit(project, wanted, patch) {
     candidate.updated = new Date().toISOString();
     data.lanes[current.id] = candidate;
     return enrich(project, current.id, candidate);
-  });
+  }, { worklogLock: patch.status === "archived" ? current.lock : null });
 }
 
 export function formatChoices(lanes) {
