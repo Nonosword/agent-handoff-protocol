@@ -45,8 +45,9 @@ removes only that entry.
 { "mcpServers": { "agent-handoff": { "command": "node", "args": ["<REPO>/bin/ahp-mcp"] } } }
 ```
 
-**Claude Desktop (macOS)** —
-`~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Claude Desktop** — macOS:
+`~/Library/Application Support/Claude/claude_desktop_config.json`; Linux:
+`${XDG_CONFIG_HOME:-~/.config}/Claude/claude_desktop_config.json`:
 
 ```json
 { "mcpServers": { "agent-handoff": { "command": "node", "args": ["<REPO>/bin/ahp-mcp"] } } }
@@ -55,7 +56,10 @@ removes only that entry.
 Claude Desktop and Claude Code are separate hosts. Configure either one without
 requiring the other; quit and reopen Claude Desktop after changing its config.
 
-**Codex** — `~/.codex/config.toml`:
+**Codex** — `~/.codex/config.toml`. The Codex CLI, the ChatGPT desktop app
+(which the Codex app merged into) and the `openai.chatgpt` IDE extension all
+share this file, so one entry covers every one of them. `install.sh` uses the
+`codex` on PATH, or else the codex binary bundled with the app or extension:
 
 ```toml
 [mcp_servers.agent-handoff]

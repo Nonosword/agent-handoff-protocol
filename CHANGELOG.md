@@ -7,6 +7,19 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.8.1 — 2026-09-10
+
+- The installer now detects Claude Desktop on Linux. Its config path is derived
+  per platform (`~/.config/Claude/claude_desktop_config.json` outside macOS,
+  honouring `XDG_CONFIG_HOME`), and the `claude-desktop` binary on PATH or
+  `/usr/lib/claude-desktop` identifies a first-run install.
+- Codex is detected through every surface that shares `~/.codex/config.toml`:
+  the CLI, the ChatGPT desktop app (which absorbed the Codex app) and the
+  `openai.chatgpt` IDE extension. Without a `codex` on PATH, registration uses
+  the codex binary bundled with the app or extension; if none is found, the
+  manual `config.toml` snippet is printed instead of silently skipping.
+- Installer tests no longer depend on the agent CLIs installed on the host.
+
 ## 0.8.0 — 2026-09-10
 
 - Added MCP `ahp_project_list` so Desktop agents can discover registered

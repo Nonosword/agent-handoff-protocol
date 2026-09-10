@@ -27,10 +27,66 @@ STORE="${AHP_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-handoff}"
 CLAUDE_SKILL_DIR="$HOME/.claude/skills/agent-handoff-protocol"
 # Claude Desktop is a distinct MCP host from Claude Code. It owns a dedicated
 # JSON configuration, whereas Claude Code is registered through `claude mcp`.
-# Keep an override for tests and non-standard desktop installations.
-CLAUDE_DESKTOP_MCP="${CLAUDE_DESKTOP_MCP:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
-CLAUDE_DESKTOP_APP="${CLAUDE_DESKTOP_APP:-/Applications/Claude.app}"
+# Keep an override for tests and non-standard desktop installations. The config
+# lives in Electron's userData dir, which is platform-specific; on Linux the app
+# is a binary on PATH (packages install /usr/bin/claude-desktop), not a bundle.
+case "$(uname -s 2>/dev/null)" in
+  Darwin)
+    CLAUDE_DESKTOP_MCP="${CLAUDE_DESKTOP_MCP:-$HOME/Library/Application Support/Claude/claude_desktop_config.json}"
+    CLAUDE_DESKTOP_APP="${CLAUDE_DESKTOP_APP:-/Applications/Claude.app}" ;;
+  *)
+    CLAUDE_DESKTOP_MCP="${CLAUDE_DESKTOP_MCP:-${XDG_CONFIG_HOME:-$HOME/.config}/Claude/claude_desktop_config.json}"
+    if [ -z "${CLAUDE_DESKTOP_APP:-}" ]; then
+      CLAUDE_DESKTOP_APP="$(command -v claude-desktop 2>/dev/null || echo /usr/lib/claude-desktop)"
+    fi ;;
+esac
 CODEX_AGENTS="$HOME/.codex/AGENTS.md"
+# Codex surfaces: the CLI, the ChatGPT desktop app (which absorbed the Codex
+# app) and the `openai.chatgpt` IDE extension all read one shared
+# ~/.codex/config.toml, so a single `codex mcp add` covers every one of them.
+# The app and the extension each bundle a full codex binary; borrow it when no
+# CLI is on PATH so an app-only machine is registered instead of skipped.
+# CHATGPT_APP / CODEX_CLI override discovery for tests and odd installs.
+chatgpt_app() {
+  local p d
+  if [ -n "${CHATGPT_APP:-}" ]; then [ -e "$CHATGPT_APP" ] && printf '%s' "$CHATGPT_APP"; return 0; fi
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) set -- /Applications/ChatGPT.app /Applications/Codex.app \
+              "$HOME/Applications/ChatGPT.app" "$HOME/Applications/Codex.app" ;;
+    *)      set -- /opt/ChatGPT /opt/chatgpt /usr/lib/chatgpt /usr/share/chatgpt
+            # A packaged launcher on PATH usually links into the install dir.
+            if p="$(command -v chatgpt 2>/dev/null)" && p="$(readlink -f "$p" 2>/dev/null)"; then
+              d="$(dirname "$p")"; case "$d" in */bin) ;; *) set -- "$d" "$@" ;; esac
+            fi ;;
+  esac
+  for p in "$@"; do [ -e "$p" ] && { printf '%s' "$p"; return 0; }; done
+  return 0
+}
+codex_extension() {   # newest installed openai.chatgpt extension dir, any VS Code fork
+  ls -td "$HOME"/.vscode/extensions/openai.chatgpt-* "$HOME"/.vscode-insiders/extensions/openai.chatgpt-* \
+    "$HOME"/.vscode-server/extensions/openai.chatgpt-* "$HOME"/.cursor/extensions/openai.chatgpt-* \
+    "$HOME"/.windsurf/extensions/openai.chatgpt-* 2>/dev/null | head -1
+}
+bundled_codex() {     # dir → first working codex binary beneath it
+  local f
+  [ -d "$1" ] || return 1
+  while IFS= read -r f; do
+    "$f" --version >/dev/null 2>&1 && { printf '%s' "$f"; return 0; }
+  done <<EOF
+$(find "$1" -maxdepth 6 -type f -name codex -perm -u+x 2>/dev/null)
+EOF
+  return 1
+}
+CHATGPT_APP_PATH="$(chatgpt_app)"
+CODEX_EXT="$(codex_extension)"
+CODEX_CLI="${CODEX_CLI:-}" CODEX_VIA=""
+if [ -z "$CODEX_CLI" ] && command -v codex >/dev/null 2>&1; then CODEX_CLI="$(command -v codex)"; fi
+if [ -z "$CODEX_CLI" ] && [ -n "$CHATGPT_APP_PATH" ]; then
+  CODEX_CLI="$(bundled_codex "$CHATGPT_APP_PATH")" && CODEX_VIA="bundled with ChatGPT app"
+fi
+if [ -z "$CODEX_CLI" ] && [ -n "$CODEX_EXT" ]; then
+  CODEX_CLI="$(bundled_codex "$CODEX_EXT")" && CODEX_VIA="bundled with IDE extension"
+fi
 # Worker identity for the *shell* path: the MCP env blocks below attribute
 # tool calls, but a bare `ahp` CLI call an agent runs in a shell has no such
 # hint and would fall back to process-tree guessing. Wire the identity into
@@ -554,16 +610,16 @@ if [ "$UNINSTALL" = 1 ]; then
       ok "stripped Codex AGENTS.md block" "$CODEX_AGENTS"
     fi
   else skip "Codex snippet not present"; fi
-  for cli in claude codex; do
-    command -v "$cli" >/dev/null 2>&1 || continue
-    if [ "$DRY" = 1 ]; then dry "remove MCP registration" "$cli mcp remove agent-handoff"; continue; fi
-    "$cli" mcp get agent-handoff >/dev/null 2>&1 || { skip "no MCP registration" "$cli"; continue; }
+  for cli in claude "$CODEX_CLI"; do
+    [ -n "$cli" ] && command -v "$cli" >/dev/null 2>&1 || continue
+    if [ "$DRY" = 1 ]; then dry "remove MCP registration" "${cli##*/} mcp remove agent-handoff"; continue; fi
+    "$cli" mcp get agent-handoff >/dev/null 2>&1 || { skip "no MCP registration" "${cli##*/}"; continue; }
     removed=0
     for s in "" "-s user" "-s local" "-s project"; do
       # shellcheck disable=SC2086
       "$cli" mcp remove agent-handoff $s >/dev/null 2>&1 && { removed=1; break; }
     done
-    [ "$removed" = 1 ] && ok "removed MCP registration" "$cli" || warn "MCP remove failed" "$cli mcp remove agent-handoff"
+    [ "$removed" = 1 ] && ok "removed MCP registration" "${cli##*/}" || warn "MCP remove failed" "${cli##*/} mcp remove agent-handoff"
   done
   if [ -n "$QODER_CLI" ]; then
     if [ "$DRY" = 1 ]; then dry "remove MCP registration" "$QODER_CLI mcp remove agent-handoff"
@@ -670,13 +726,20 @@ fi
 
 section "Agent hosts"
 HAS_CLAUDE=0; command -v claude >/dev/null 2>&1 && HAS_CLAUDE=1
-HAS_CODEX=0;  command -v codex  >/dev/null 2>&1 && HAS_CODEX=1
+HAS_CODEX=0;  { [ -n "$CODEX_CLI" ] || [ -n "$CHATGPT_APP_PATH" ] || [ -n "$CODEX_EXT" ]; } && HAS_CODEX=1
 [ "$HAS_CLAUDE" = 1 ] && ok "claude" "$(claude --version 2>/dev/null | head -1)" || skip "claude" "not found"
-[ "$HAS_CODEX" = 1 ]  && ok "codex"  "$(codex --version 2>/dev/null | head -1)"  || skip "codex" "not found"
+if [ -n "$CODEX_CLI" ]; then ok "codex" "$("$CODEX_CLI" --version 2>/dev/null | head -1)${CODEX_VIA:+ · $CODEX_VIA}"
+elif [ "$HAS_CODEX" = 1 ]; then ok "codex" "detected (no codex binary found)"
+else skip "codex" "not found"; fi
+# Same Codex host as the CLI (shared ~/.codex/config.toml), listed separately
+# so a machine with only the app or the extension still reads as covered.
+[ -n "$CHATGPT_APP_PATH" ] && ok "chatgpt desktop" "$CHATGPT_APP_PATH" || skip "chatgpt desktop" "not found"
+[ -n "$CODEX_EXT" ] && ok "codex ide extension" "$(basename "$CODEX_EXT")" || skip "codex ide extension" "not found"
 # Do not infer the Desktop app from the Claude Code CLI (or vice versa). A
 # config file is enough to identify an existing Desktop installation; the app
-# bundle covers the first-run case before it has written a config file.
-HAS_CLAUDE_DESKTOP=0; { [ -f "$CLAUDE_DESKTOP_MCP" ] || [ -d "$CLAUDE_DESKTOP_APP" ]; } && HAS_CLAUDE_DESKTOP=1
+# bundle (or Linux binary) covers the first-run case before it has written a
+# config file.
+HAS_CLAUDE_DESKTOP=0; { [ -f "$CLAUDE_DESKTOP_MCP" ] || [ -e "$CLAUDE_DESKTOP_APP" ]; } && HAS_CLAUDE_DESKTOP=1
 [ "$HAS_CLAUDE_DESKTOP" = 1 ] && ok "claude desktop" "detected" || skip "claude desktop" "not found"
 # These hosts are independently detected through their own CLI, app or config.
 HAS_CURSOR=0;   { command -v cursor  >/dev/null 2>&1 || [ -d "$HOME/.cursor" ]; }            && HAS_CURSOR=1
@@ -771,6 +834,7 @@ install_identity() {
 register_host() {
   local host="$1" cli="$2"; shift 2
   local addargs=("$@")
+  [ -n "$cli" ] || return 1
   if [ "$DRY" = 1 ]; then dry "register with $host" "$cli mcp add … agent-handoff -- node …/ahp-mcp"; return 0; fi
   command -v "$cli" >/dev/null 2>&1 || return 1
 
@@ -882,10 +946,12 @@ EOF
       "$(printf '{"command":"node","args":["%s/bin/ahp-mcp"],"env":{"AHP_WORKER_ID":"claude","AHP_MODEL":"claude","AHP_RUNTIME":"claude-desktop"}}' "$REPO")"
   else skip "Claude Desktop" "not found"; fi
 
-  register_host "Codex" codex \
+  # One registration serves the CLI, the ChatGPT desktop app and the IDE
+  # extension: they share ~/.codex/config.toml.
+  register_host "Codex" "$CODEX_CLI" \
     --env AHP_WORKER_ID=codex --env AHP_MODEL=codex --env AHP_RUNTIME=codex || {
-    [ -d "$HOME/.codex" ] && {
-      warn "Codex CLI" "not found — add to ~/.codex/config.toml by hand:"
+    { [ "$HAS_CODEX" = 1 ] || [ -d "$HOME/.codex" ]; } && {
+      warn "codex binary" "not found — add to ~/.codex/config.toml by hand:"
       snippet <<EOF
 [mcp_servers.agent-handoff]
 command = "node"

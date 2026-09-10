@@ -77,7 +77,8 @@ tools:
 - **cli** — agents run the `ahp` CLI; the skill / snippet teach the sequence.
 - **mcp** *(recommended)* — the above, plus `ahp-mcp` registered as an MCP
   server with each detected host — Claude Code / Codex via their own `mcp add`
-  CLI; Claude Desktop, Cursor, VS Code and Windsurf by merging into each
+  CLI (one Codex entry also covers the ChatGPT desktop app and IDE extension);
+  Claude Desktop, Cursor, VS Code and Windsurf by merging into each
   application's dedicated MCP config file (never touching anything else in it);
   Qoder via its `mcp add` CLI; and Qoder CN via its separate
   `qoder-cn --add-mcp <JSON>` CLI — so agents call

@@ -202,11 +202,17 @@ test("installer atomically merges and removes only its MCP JSON entry", () => {
     hostSetting: { preserve: true }
   };
   fs.writeFileSync(config, JSON.stringify(original, null, 2) + "\n");
+  // Keep the real agent CLIs and desktop apps out: this exercises only the
+  // JSON merge, and a host's own `claude` / `codex` must not decide the result.
   const env = {
     ...ENV,
     HOME: home,
+    PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
     AHP_BIN_DIR: path.join(root, "bin"),
     AHP_HOME: path.join(root, "store"),
+    CLAUDE_DESKTOP_MCP: path.join(root, "no-claude", "claude_desktop_config.json"),
+    CLAUDE_DESKTOP_APP: path.join(root, "no-claude.app"),
+    CHATGPT_APP: path.join(root, "no-chatgpt"),
     QODER_APP: path.join(root, "no-qoder.app"),
     QODER_CONFIG: path.join(home, ".qoder"),
     QODER_CN_APP: path.join(root, "no-qoder-cn.app"),
@@ -279,6 +285,97 @@ test("installer registers Claude Desktop independently from the Claude Code CLI"
   const uninstall = spawnSync("bash", [path.join(REPO, "install.sh"), "--uninstall", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
   assert.equal(uninstall.status, 0, uninstall.stdout + uninstall.stderr);
   assert.deepEqual(JSON.parse(fs.readFileSync(config, "utf8")), original, "Claude Desktop uninstall leaves unrelated JSON untouched");
+});
+
+test("installer derives the Claude Desktop config path from the platform", () => {
+  const root = path.join(TMP, "installer-claude-desktop-platform");
+  const home = path.join(root, "home");
+  const xdg = path.join(root, "xdg");
+  // An existing app path stands in for the installed Desktop; the config file
+  // does not exist yet, so its location must come from the platform default.
+  const app = path.join(root, "claude-desktop");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(app, "");
+  const env = {
+    ...ENV,
+    HOME: home,
+    XDG_CONFIG_HOME: xdg,
+    PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    AHP_BIN_DIR: path.join(root, "bin"),
+    AHP_HOME: path.join(root, "store"),
+    CLAUDE_DESKTOP_APP: app,
+    CHATGPT_APP: path.join(root, "no-chatgpt"),
+    QODER_APP: path.join(root, "no-qoder.app"),
+    QODER_CONFIG: path.join(home, ".qoder"),
+    QODER_CN_APP: path.join(root, "no-qoder-cn.app"),
+    QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+  };
+  delete env.CLAUDE_DESKTOP_MCP;
+  const install = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "mcp", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(install.status, 0, install.stdout + install.stderr);
+  assert.match(install.stdout, /claude desktop\s+detected/);
+  const config = process.platform === "darwin"
+    ? path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+    : path.join(xdg, "Claude", "claude_desktop_config.json");
+  assert.equal(JSON.parse(fs.readFileSync(config, "utf8")).mcpServers["agent-handoff"].env.AHP_RUNTIME, "claude-desktop");
+});
+
+test("installer registers Codex through the binary bundled with the IDE extension or ChatGPT app", () => {
+  const fakeCodex = (file, log) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `#!/bin/sh\necho "$*" >> '${log}'\ncase "$1" in --version) echo codex-cli 0.0.0-test ;; mcp) [ "$2" = get ] && exit 1 ;; esac\nexit 0\n`);
+    fs.chmodSync(file, 0o755);
+  };
+  const run = (name, setup) => {
+    const root = path.join(TMP, `installer-codex-${name}`);
+    const home = path.join(root, "home");
+    const log = path.join(root, "codex.log");
+    fs.mkdirSync(home, { recursive: true });
+    // No `codex` on PATH: only the bundled binaries can register the server.
+    const env = {
+      ...ENV,
+      HOME: home,
+      PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      AHP_BIN_DIR: path.join(root, "bin"),
+      AHP_HOME: path.join(root, "store"),
+      CLAUDE_DESKTOP_MCP: path.join(root, "no-claude", "claude_desktop_config.json"),
+      CLAUDE_DESKTOP_APP: path.join(root, "no-claude.app"),
+      CHATGPT_APP: path.join(root, "no-chatgpt"),
+      QODER_APP: path.join(root, "no-qoder.app"),
+      QODER_CONFIG: path.join(home, ".qoder"),
+      QODER_CN_APP: path.join(root, "no-qoder-cn.app"),
+      QODER_CN_CONFIG: path.join(home, ".qoder-cn"),
+      ...setup({ root, home, log })
+    };
+    delete env.CODEX_CLI;
+    const r = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "mcp", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return { out: r.stdout, calls: fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "" };
+  };
+  const add = /^mcp add agent-handoff --env AHP_WORKER_ID=codex --env AHP_MODEL=codex --env AHP_RUNTIME=codex -- node /m;
+
+  const ext = run("extension", ({ home, log }) => {
+    fakeCodex(path.join(home, ".vscode", "extensions", "openai.chatgpt-1.0.0-test", "bin", "test", "codex"), log);
+    return {};
+  });
+  assert.match(ext.out, /codex\s+codex-cli 0\.0\.0-test · bundled with IDE extension/);
+  assert.match(ext.out, /codex ide extension\s+openai\.chatgpt-1\.0\.0-test/);
+  assert.match(ext.calls, add);
+
+  const app = run("chatgpt-app", ({ root, log }) => {
+    fakeCodex(path.join(root, "ChatGPT.app", "Contents", "Resources", "codex"), log);
+    return { CHATGPT_APP: path.join(root, "ChatGPT.app") };
+  });
+  assert.match(app.out, /bundled with ChatGPT app/);
+  assert.match(app.out, /chatgpt desktop\s+\S*ChatGPT\.app/);
+  assert.match(app.calls, add);
+
+  const nobin = run("chatgpt-app-no-binary", ({ root }) => {
+    fs.mkdirSync(path.join(root, "ChatGPT.app"), { recursive: true });
+    return { CHATGPT_APP: path.join(root, "ChatGPT.app") };
+  });
+  assert.match(nobin.out, /codex\s+detected \(no codex binary found\)/);
+  assert.match(nobin.out, /codex binary\s+not found — add to ~\/\.codex\/config\.toml by hand/);
 });
 
 test("installer wires worker identity into the Claude Code and Codex shell environments", () => {
