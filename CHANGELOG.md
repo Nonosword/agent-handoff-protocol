@@ -7,6 +7,18 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.7.0 — 2026-09-10
+
+- Added the explicit Lane lifecycle `active` → `done` → `archived`. Completion
+  is guarded by baton, open-intent, and strict-verification checks; historical
+  `blocked` metadata remains readable but is no longer assignable.
+- Default Lane discovery now returns active and done work, while `--all` (or MCP
+  `all:true`) opts into archived history. Active Lanes win automatic selection;
+  a done Lane reopens only through an explicit `start --lane`.
+- Dashboard expands active Lanes, summarizes done Lanes, and omits archived
+  Lanes without adding a polling loop. Agent instructions, MCP metadata, and
+  lifecycle documentation now describe the same routing rules.
+
 ## 0.6.0 — 2026-09-10
 
 - Closed review findings across Project identity, append-only worklogs, host

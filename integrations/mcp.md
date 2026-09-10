@@ -125,7 +125,7 @@ multiple Lanes, also pass its matching `lane`.
 | `ahp_end` | append `handoff.end` (best-effort) |
 | `ahp_read` | read records, or project one field (`field:"hazards"` = landmines + findings) |
 | `ahp_verify` | validate the selected Lane worklog |
-| `ahp_lane_list` | list Lane descriptions and baton state |
+| `ahp_lane_list` | list active + done Lanes; `all:true` also returns archived history |
 | `ahp_lane_create` | create a Lane only when no existing one matches |
 | `ahp_lane_edit` | refine Lane metadata or lifecycle status |
 
@@ -135,3 +135,8 @@ Whichever host: tell the agent to resolve the Project and Lane first. It should
 select a clear Lane match itself, create one only when none matches, and ask the
 operator only for genuine ambiguity. Then call `ahp_pickup`, reconcile, and
 `ahp_start`; use one intent per commit and `ahp_end` when stopping.
+
+Lifecycle status is `active`, `done`, or `archived`. Done Lanes stay visible to
+prevent accidental duplicates and reopen only through an explicit `ahp_start`
+with their `lane`. Archived Lanes are hidden unless `ahp_lane_list` receives
+`all:true`; change their status explicitly before reuse.

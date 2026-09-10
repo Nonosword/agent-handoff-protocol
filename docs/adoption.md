@@ -37,11 +37,14 @@ structured MCP path and falls back to the shell.
 
 ## Per work stream — select a Lane
 
-A Project may contain several independent Lanes. Run `ahp lane list`; use
+A Project may contain several independent Lanes. Run `ahp lane list`; it shows
+both active and done work so a completed matching Lane is not accidentally
+duplicated. Use `ahp lane list --all` only when archived history is relevant. Use
 `--lane <id>` when the task clearly matches an existing title, description,
-scope or alias. With no Lane, the first `start` creates one from its plan. With
-one Lane, or exactly one held by the current worker, selection is automatic. If
-several remain plausible, AHP lists the existing choices plus a new Lane; ask
+scope or alias. With no active or done Lane, the first `start` creates one from
+its plan. A sole active Lane, or exactly one active Lane held by the current
+worker, is selected automatically. If several remain plausible, AHP lists the
+existing choices plus a new Lane; ask
 the operator only when the descriptions do not resolve the ambiguity. Carry an
 explicit selection through `pickup`, `start` and later writes; once it is the
 sole Lane held by that worker, auto-selection can take over.
@@ -51,11 +54,17 @@ commit may appear in multiple Lanes; it is an association, not a duplicate. AHP
 does not decide whether code work uses the current branch or a separate
 branch/worktree.
 
+Use `active` for current work, `done` for completed but discoverable work, and
+`archived` for completed work intentionally hidden from normal discovery. An
+explicit `start --lane <done-id>` reopens a done Lane; archived Lanes must first
+be unarchived with `lane edit`. Completion requires a free baton, no open
+intents, and strict verification. There is no age-based auto-archive.
+
 ## Seeing everything at once
 
 ```sh
-ahp dashboard        # every Project/Lane: baton, plan, counts, open intents,
-                     # verify, branch and short HEAD
+ahp dashboard        # active Lanes expanded, done Lanes counted, archived hidden;
+                     # baton, plan, verify, branch and short HEAD
 ahp dashboard -w     # redraws on local AHP state changes; fixed timestamps need no polling
 ahp dashboard --json # for scripts; exit 1 if a Lane cannot be read or verified
 ```

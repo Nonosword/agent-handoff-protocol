@@ -24,14 +24,21 @@ automatic; for the CLI, `install.sh` wires `AHP_WORKER_ID` into Codex's shell
 environment. If a record still lands wrong, pass `--worker-id codex --model
 codex --runtime codex` on `ahp start` — later records in the session inherit it.
 
-Resolve the Lane before the first change. Run `ahp lane list` when more than one
-exists. If the task clearly matches an id/title/description/scope/alias, select
+Resolve the Lane before the first change. Run `ahp lane list` to discover active
+and done work. If the task clearly matches an id/title/description/scope/alias, select
 it with `--lane <id>` (or the MCP `lane` field) without asking. If none matches,
 create one with a concise title, description and scope. If several remain
-plausible, show the listed Lanes plus New Lane and ask the user. With no Lane,
-`start` creates one from its plan; a sole Lane or the sole Lane held by you is
-automatically selected. Carry the same explicit Lane through `pickup`, `start`
+plausible, show the listed Lanes plus New Lane and ask the user. With no active
+or done Lane, `start` creates one from its plan; a sole active Lane or the sole
+active Lane held by you is automatically selected. Carry the same explicit Lane through `pickup`, `start`
 and later writes. Do not create a near-duplicate Lane.
+
+Default Lane discovery includes `active` and `done`; use `lane list --all` only
+when archived history matters. Prefer active Lanes. A done Lane stays visible to
+prevent duplicates and is reopened only by an explicit `start --lane <id>`.
+Archived Lanes are hidden and must be changed explicitly to `active` or `done`
+before reuse. Never archive by age. The legacy Lane status `blocked` is
+read-only compatibility; record a blocked session with `handoff.end` instead.
 
 Only the worker holding the selected Lane baton may write an intent or
 `handoff.end`. If AHP names a different holder, do not end or promote its

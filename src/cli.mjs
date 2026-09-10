@@ -50,9 +50,9 @@ WRITE  (append-only; seq and timestamp are assigned for you)
        --gate pass|fail|not-run [--evidence ...] [--finding TEXT]...
 
 LANES
-  lane list [--json]
+  lane list [--all] [--json]
   lane create --title TEXT --description TEXT [--id ID] [--scope S]... [--alias A]...
-  lane edit <id> [--title TEXT] [--description TEXT] [--scope S]... [--alias A]...\n                 [--status active|blocked|done|archived]
+  lane edit <id> [--title TEXT] [--description TEXT] [--scope S]... [--alias A]...\n                 [--status active|done|archived]
 
 PROJECTS
   project list
@@ -212,8 +212,15 @@ function laneTarget(proj, lane) {
 function assertLaneWritable(proj) {
   if (!proj.lane) return;
   const current = lanes.find(proj.laneProject ?? proj, proj.lane.id);
-  if (!current || current.status === "archived") {
-    throw new Error(`Lane "${proj.lane.id}" is archived — edit its status or choose another Lane`);
+  if (!current) throw new Error(`Lane "${proj.lane.id}" no longer exists`);
+  if (current.status === "done") {
+    throw new Error(`Lane "${current.id}" is done — run \`ahp start --lane ${current.id}\` to reopen it, or edit its status to active`);
+  }
+  if (current.status === "archived") {
+    throw new Error(`Lane "${current.id}" is archived — run \`ahp lane edit ${current.id} --status active\` before writing`);
+  }
+  if (current.status !== "active") {
+    throw new Error(`Lane "${current.id}" has legacy status "${current.status}" — edit its status to active or done before writing`);
   }
 }
 
@@ -231,18 +238,26 @@ function resolveTarget(values, { registerMissing = false, autoPlan = null } = {}
     if (registerMissing && lane.status === "archived") throw new Error(`Lane "${lane.id}" is archived — edit its status or choose another Lane`);
     return laneTarget(proj, lane);
   }
-  const candidates = lanes.list(proj, { includeArchived: false });
+  const visible = lanes.list(proj);
+  const candidates = visible.filter((lane) => lane.status === "active");
   if (candidates.length === 0) {
     if (registerMissing && autoPlan) {
+      if (visible.length) {
+        throw new Error(lanes.formatChoices(visible, {
+          heading: "No active Lane is available; choose a done Lane to reopen or create a new Lane:"
+        }));
+      }
       const title = String(autoPlan).trim().slice(0, 80);
       const lane = lanes.create(proj, { title, description: String(autoPlan).trim() });
       process.stdout.write(`lane.created ${lane.id} — ${lane.title}\n`);
       return laneTarget(proj, lane);
     }
-    if (registerMissing) {
+    if (registerMissing && visible.length === 0) {
       throw new Error("no Lane exists — run `ahp start` to create one from its plan, or `ahp lane create`");
     }
-    return proj;
+    if (visible.length === 0) return proj;
+    if (visible.length === 1) return laneTarget(proj, visible[0]);
+    throw new Error(lanes.formatChoices(visible));
   }
   if (candidates.length === 1) {
     const lane = candidates[0];
@@ -259,7 +274,7 @@ function resolveTarget(values, { registerMissing = false, autoPlan = null } = {}
     const lane = heldByMe[0];
     return laneTarget(proj, lane);
   }
-  throw new Error(lanes.formatChoices(candidates));
+  throw new Error(lanes.formatChoices([...candidates, ...visible.filter((lane) => lane.status !== "active")]));
 }
 
 // --- read commands -------------------------------------------------------
@@ -296,7 +311,9 @@ function relatedPromotionSources(proj, analysis, hasCommits) {
   const sources = [{ laneId: proj.lane?.id ?? null, promotions: analysis.promotes }];
   const unreadLanes = [];
   if (!hasCommits || !proj.lane) return { sources, unreadLanes };
-  for (const lane of lanes.list(proj.laneProject ?? proj)) {
+  // Archived Lanes are hidden from task discovery, but their commit
+  // associations remain historical evidence for reconciliation.
+  for (const lane of lanes.list(proj.laneProject ?? proj, { includeArchived: true })) {
     if (lane.id === proj.lane.id) continue;
     try {
       const promotions = readEntries(lane.worklog).map((entry) => entry.record)
@@ -484,6 +501,13 @@ function cmdStart(rest, home) {
   if (!values.plan) throw new Error("start requires --plan");
   assertGate(values.gate, false);
   const proj = resolveTarget(values, { registerMissing: true, autoPlan: values.plan });
+  if (proj.lane?.status === "done") {
+    const reopened = lanes.edit(proj.laneProject, proj.lane.id, { status: "active" });
+    proj.lane = reopened;
+    proj.worklog = reopened.worklog;
+    proj.lock = reopened.lock;
+    process.stdout.write(`lane.reopened ${reopened.id} — ${reopened.title}\n`);
+  }
   const root = requireProjectGit(proj);
   const g = gitView(root);
   const analysis = analyze(readEntries(proj.worklog));
@@ -662,16 +686,21 @@ function cmdLane(rest, home) {
   const { values, positionals } = parse(rest.slice(1), {
     id: { type: "string" }, title: { type: "string" }, description: { type: "string" },
     status: { type: "string" }, scope: { type: "string", multiple: true },
-    alias: { type: "string", multiple: true }, json: { type: "boolean" }
+    alias: { type: "string", multiple: true }, json: { type: "boolean" }, all: { type: "boolean" }
   }, { allowPositionals: true });
   const proj = resolveProject(values, { registerMissing: sub === "create" });
   if (sub === "list") {
-    const items = lanes.list(proj);
+    const items = lanes.list(proj, { includeArchived: values.all });
     if (values.json) {
       process.stdout.write(JSON.stringify(items.map(({ worklog, lock, ...lane }) => lane)) + "\n");
       return 0;
     }
-    if (!items.length) { process.stdout.write("(no Lanes; first start creates one from its plan)\n"); return 0; }
+    if (!items.length) {
+      const archivedCount = values.all ? 0 : lanes.list(proj, { includeArchived: true }).filter((lane) => lane.status === "archived").length;
+      const archivedHint = archivedCount ? `; ${archivedCount} archived — use \`ahp lane list --all\`` : "";
+      process.stdout.write(`(no active or done Lanes${archivedHint}; first start can create one from its plan)\n`);
+      return 0;
+    }
     for (const lane of items) {
       let state;
       try { state = analyze(readEntries(lane.worklog)); } catch { state = null; }

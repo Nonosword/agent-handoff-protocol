@@ -103,8 +103,8 @@ const TOOLS = [
   },
   {
     name: "ahp_lane_list",
-    description: "List this project's Lanes with concise descriptions and baton state.",
-    inputSchema: { type: "object", properties: { as_json: { type: "boolean" }, cwd: COMMON.cwd, project: COMMON.project } }
+    description: "List active and done Lanes for safe task routing. Pass all:true only when archived history is relevant.",
+    inputSchema: { type: "object", properties: { all: { type: "boolean" }, as_json: { type: "boolean" }, cwd: COMMON.cwd, project: COMMON.project } }
   },
   {
     name: "ahp_lane_create",
@@ -119,7 +119,7 @@ const TOOLS = [
     description: "Edit a Lane title, description, scope, aliases, or lifecycle status.",
     inputSchema: {
       type: "object", required: ["lane"],
-      properties: { lane: { type: "string" }, title: { type: "string" }, description: { type: "string" }, status: { type: "string", enum: ["active", "blocked", "done", "archived"] }, scope: { type: "array", items: { type: "string" } }, aliases: { type: "array", items: { type: "string" } }, cwd: COMMON.cwd, project: COMMON.project }
+      properties: { lane: { type: "string" }, title: { type: "string" }, description: { type: "string" }, status: { type: "string", enum: ["active", "done", "archived"] }, scope: { type: "array", items: { type: "string" } }, aliases: { type: "array", items: { type: "string" } }, cwd: COMMON.cwd, project: COMMON.project }
     }
   },
   {
@@ -199,7 +199,7 @@ function toArgv(name, a = {}) {
   switch (name) {
     case "ahp_status": return ["status", ...g];
     case "ahp_pickup": return ["pickup", ...(a.full ? ["--full"] : []), ...g];
-    case "ahp_lane_list": return ["lane", "list", ...(a.as_json ? ["--json"] : []), ...g];
+    case "ahp_lane_list": return ["lane", "list", ...(a.all ? ["--all"] : []), ...(a.as_json ? ["--json"] : []), ...g];
     case "ahp_lane_create": {
       const r = ["lane", "create", "--title", String(a.title), "--description", String(a.description), ...g];
       if (a.id) r.push("--id", String(a.id));

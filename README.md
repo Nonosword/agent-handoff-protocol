@@ -111,9 +111,12 @@ timestamp, the base commit and tree state from Git — you supply the meaning.
 
 Project detection stays automatic. Within that Project:
 
-1. With no Lane, the first `ahp start` creates one from its plan.
-2. With one selectable Lane — or exactly one Lane already held by this worker —
-   AHP selects it automatically.
+1. `ahp lane list` returns `active` and `done` Lanes, so an agent can reuse or
+   reopen completed work instead of creating a near-duplicate. `--all` also
+   includes intentionally hidden `archived` Lanes.
+2. With no `active` or `done` Lane, the first `ahp start` creates one from its
+   plan. A sole `active` Lane — or exactly one active Lane already held by this
+   worker — is selected automatically.
 3. When the task clearly matches a Lane's id, title, description, scope or alias,
    the agent passes `--lane <id>` (or the MCP `lane` field).
 4. If several Lanes remain plausible, AHP lists them plus **Create a new Lane**;
@@ -121,7 +124,19 @@ Project detection stays automatic. Within that Project:
 
 Carry the same explicit Lane through `pickup`, `start` and later writes; after it is the only Lane held by you, auto-selection can safely take over.
 Use `ahp lane list`, `ahp lane create`, and `ahp lane edit` to inspect or refine
-the metadata. Agents propose concise Lane descriptions; humans may edit them.
+the metadata. Lane status has three user-facing values:
+
+- `active` accepts worklog writes and is expanded in the Dashboard.
+- `done` is complete but remains discoverable. `ahp start --lane <id>` explicitly
+  reopens it as `active`; an implicit `start` shows it as a choice instead.
+- `archived` is complete and hidden from default lists and the Dashboard. Use
+  `lane list --all`, then `lane edit <id> --status active|done` to restore it.
+
+Changing a Lane to `done` or `archived` requires a free baton, no open intents,
+and a clean strict verification result. AHP never archives by age. Historical
+`blocked` registry values remain readable but must be changed to `active` or
+`done` before new writes. Agents propose concise Lane descriptions; humans may
+edit them.
 A commit may legitimately be promoted by intents in multiple Lanes: AHP records
 associations, not commit ownership, and performs no semantic commit deduplication.
 The agent still decides whether the work needs its own branch/worktree or can
@@ -141,7 +156,7 @@ not an error). Never silently substitute an in-repo worklog.
 From **anywhere** — every project at a glance:
 
 ```sh
-ahp dashboard       # every Project/Lane: baton, plan, open intents, verify,
+ahp dashboard       # active Lanes expanded; done Lanes counted; archived hidden
                     # plus branch and short HEAD (no working-tree/log scan)
 ahp dashboard -w    # redraw on local AHP state changes; fixed timestamps need no polling
 ahp dashboard --json

@@ -149,22 +149,44 @@ and every local path it has been seen at, so a moved checkout still resolves.
 
 Project resolution happens first. The consumer then resolves one Lane:
 
-1. An explicit Lane id, title or alias selects that Lane.
-2. With no selectable Lane, the first `handoff.start` MAY create one from its
+1. Default discovery returns `active` and `done` Lanes. `archived` Lanes require
+   an explicit all/history query.
+2. An explicit Lane id, title or alias selects that Lane for reads. Only an
+   `active` Lane accepts worklog writes.
+3. With no discovered Lane, the first `handoff.start` MAY create one from its
    plan; other writes MUST require a Lane first.
-3. A sole selectable Lane is selected automatically. If several exist but
-   exactly one is held by the current worker, that Lane is selected.
-4. Otherwise the worker SHOULD compare the task with each Lane's title,
+4. Active Lanes take selection precedence. A sole active Lane is selected
+   automatically. If several active Lanes exist but exactly one is held by the
+   current worker, that Lane is selected.
+5. If no active Lane exists, a sole `done` Lane MAY be selected for reads, but
+   `handoff.start` MUST require an explicit selection before reopening it.
+6. Otherwise the worker SHOULD compare the task with each Lane's title,
    description, scope and aliases. A clear match is selected explicitly; if no
    Lane matches, the worker creates a concise new Lane.
-5. If several matches remain plausible, the consumer MUST show the existing
+7. If several matches remain plausible, the consumer MUST show the existing
    Lane descriptions plus a new-Lane option. The worker asks the operator only
    when it cannot resolve that ambiguity reliably.
 
 Workers MAY propose Lane metadata and operators MAY edit it. Implementations
 MUST prevent ids, titles and aliases from overlapping in ways that make an
-explicit selection ambiguous. Archived Lanes MUST NOT accept new records unless
-an operator changes their status.
+explicit selection ambiguous.
+
+Lane lifecycle has three user-facing states:
+
+- `active` — accepts worklog records.
+- `done` — represents completed work but stays in default discovery. An explicit
+  `handoff.start` for a done Lane reopens it as active; implementations MUST NOT
+  reopen it through implicit selection.
+- `archived` — represents completed work and is hidden from default discovery.
+  It MUST NOT accept or implicitly reopen for new records. An explicit metadata
+  transition to `active` or `done` restores it.
+
+A transition to `done` or `archived` MUST be refused while the Lane holds a
+baton, has an open intent, or fails strict worklog verification. Implementations
+MUST NOT archive Lanes merely because time elapsed. The former `blocked` Lane
+metadata value MAY be read for compatibility, but MUST NOT be offered as a new
+status or accept new records; session blockage belongs in `handoff.end.reason`
+and findings.
 
 A commit association is scoped to an intent, not owned by a Lane. The same VCS
 commit MAY therefore appear in promotions in several Lanes and MUST NOT be

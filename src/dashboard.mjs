@@ -121,8 +121,12 @@ function render(rows, home, { footer = "", version = null } = {}) {
   out.push(`  ${c.rule("─".repeat(58))}`);
 
   const allLanes = rows.flatMap((row) => row.lanes);
-  const held = allLanes.filter((lane) => lane.analysis?.batonHeld).length;
-  out.push(`  ${c.subtle(`${held} baton${held === 1 ? "" : "s"} held · ${allLanes.length - held} free · ${allLanes.length} Lane${allLanes.length === 1 ? "" : "s"}`)}`);
+  const activeLanes = allLanes.filter((lane) => lane.status === "active");
+  const doneLanes = allLanes.filter((lane) => lane.status === "done");
+  const legacyLanes = allLanes.filter((lane) => !["active", "done"].includes(lane.status));
+  const held = activeLanes.filter((lane) => lane.analysis?.batonHeld).length;
+  const lifecycleSummary = `${activeLanes.length} active (${held} held · ${activeLanes.length - held} free) · ${doneLanes.length} done`;
+  out.push(`  ${c.subtle(`${lifecycleSummary}${legacyLanes.length ? ` · ${legacyLanes.length} legacy` : ""}`)}`);
   out.push("");
 
   let anyError = false;
@@ -141,26 +145,29 @@ function render(rows, home, { footer = "", version = null } = {}) {
       anyError = true;
       out.push(`    ${c.err("✗ lanes:")} ${row.laneError}`);
     } else if (row.lanes.length === 0) {
-      out.push(`    ${c.free("○")} ${c.subtle("no Lane yet — first start creates one from its plan")}`);
+      out.push(`    ${c.free("○")} ${c.subtle("no active or done Lane — first start can create one from its plan")}`);
     }
 
-    for (const lane of row.lanes) {
+    const expandedLanes = row.lanes.filter((lane) => lane.status !== "done");
+    const compactDone = row.lanes.filter((lane) => lane.status === "done");
+    for (const lane of expandedLanes) {
       const a = lane.analysis;
       const laneName = lane.title;
+      const legacyStatus = lane.status === "active" ? "" : ` ${c.warn(`[legacy ${lane.status}]`)}`;
       if (lane.readError) {
         anyError = true;
-        out.push(`    ${c.err("✗")} ${c.bold(laneName)}  ${lane.readError}`);
+        out.push(`    ${c.err("✗")} ${c.bold(laneName)}${legacyStatus}  ${lane.readError}`);
         continue;
       }
       if (!a.count) {
-        out.push(`    ${c.free("○")} ${c.bold(laneName)}  ${c.subtle("empty")}`);
+        out.push(`    ${c.free("○")} ${c.bold(laneName)}${legacyStatus}  ${c.subtle("empty")}`);
         continue;
       }
       if (a.batonHeld) {
-        out.push(`    ${c.held("●")} ${c.bold(laneName)}  held by ${c.bold(workerLabel(a.batonWorker))} since ${c.subtle(timestamp(a.lastStart.at))}`);
+        out.push(`    ${c.held("●")} ${c.bold(laneName)}${legacyStatus}  held by ${c.bold(workerLabel(a.batonWorker))} since ${c.subtle(timestamp(a.lastStart.at))}`);
         if (a.lastStart.plan) out.push(`      ${c.subtle(a.lastStart.plan.slice(0, 92))}`);
       } else {
-        out.push(`    ${c.free("○")} ${c.bold(laneName)}  ${c.subtle("baton free")}`);
+        out.push(`    ${c.free("○")} ${c.bold(laneName)}${legacyStatus}  ${c.subtle("baton free")}`);
       }
       const details = [`${a.count} records`, `seq ${a.lastSeq}`, `${a.promotes.length} promoted`];
       if (a.openIntents.length) details.push(`${a.openIntents.length} open`);
@@ -169,6 +176,14 @@ function render(rows, home, { footer = "", version = null } = {}) {
       if (a.validation.errors.length || a.validation.warnings.length) {
         anyError = true;
         out.push(`      ${c.warn(`⚠ verify: ${a.validation.errors.length} error(s), ${a.validation.warnings.length} warning(s)`)}`);
+      }
+    }
+    if (compactDone.length) {
+      const invalidDone = compactDone.filter((lane) => lane.readError || lane.analysis?.validation.errors.length || lane.analysis?.validation.warnings.length);
+      out.push(`    ${c.subtle(`✓ ${compactDone.length} done · ahp lane list to inspect`)}`);
+      if (invalidDone.length) {
+        anyError = true;
+        out.push(`      ${c.warn(`⚠ ${invalidDone.length} done Lane${invalidDone.length === 1 ? "" : "s"} no longer pass strict verification`)}`);
       }
     }
     out.push("");

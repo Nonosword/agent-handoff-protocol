@@ -8,7 +8,10 @@ import { acquireLock, releaseLock, analyze, readEntries } from "./worklog.mjs";
 
 export const LEGACY_LANE_ID = "main";
 export const LEGACY_LANE_TITLE = "Main / legacy";
-export const LANE_STATUSES = new Set(["active", "blocked", "done", "archived"]);
+// `blocked` existed before the lifecycle model was made explicit. Keep reading
+// it so historical registries remain usable, but never offer it as a new state.
+export const LANE_STATUSES = new Set(["active", "done", "archived"]);
+const STORED_LANE_STATUSES = new Set([...LANE_STATUSES, "blocked"]);
 
 const laneFile = (project) => path.join(project.dir, "lanes.json");
 const normalized = (value) => String(value ?? "").normalize("NFKC").trim().toLowerCase()
@@ -36,7 +39,7 @@ function validateFile(data) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`Lane "${id}" must be an object`);
     if (typeof entry.title !== "string" || !entry.title.trim()) throw new Error(`Lane "${id}" needs a non-empty title`);
     if (typeof entry.description !== "string" || !entry.description.trim()) throw new Error(`Lane "${id}" needs a non-empty description`);
-    if (!LANE_STATUSES.has(entry.status)) throw new Error(`Lane "${id}" has an invalid status`);
+    if (!STORED_LANE_STATUSES.has(entry.status)) throw new Error(`Lane "${id}" has an invalid status`);
     for (const field of ["scope", "aliases"]) {
       if (!Array.isArray(entry[field]) || entry[field].some((value) => typeof value !== "string" || !value.trim())) {
         throw new Error(`Lane "${id}" ${field} must be an array of non-empty strings`);
@@ -133,7 +136,7 @@ function enrich(project, id, entry, legacy = false) {
   };
 }
 
-export function list(project, { includeArchived = true } = {}) {
+export function list(project, { includeArchived = false } = {}) {
   const data = loadFile(project);
   const rows = Object.entries(data.lanes).map(([id, entry]) => enrich(project, id, entry));
   if (hasLegacyWorklog(project) && !data.lanes[LEGACY_LANE_ID]) {
@@ -148,7 +151,7 @@ export function list(project, { includeArchived = true } = {}) {
 
 export function find(project, wanted) {
   const key = normalized(wanted);
-  return list(project).find((lane) =>
+  return list(project, { includeArchived: true }).find((lane) =>
     normalized(lane.id) === key ||
     normalized(lane.title) === key ||
     lane.aliases.some((alias) => normalized(alias) === key)
@@ -203,10 +206,17 @@ export function edit(project, wanted, patch) {
     if (!candidate.title) throw new Error("Lane title cannot be empty");
     if (!candidate.description) throw new Error("Lane description cannot be empty");
     if (patch.status != null) {
-      if (!LANE_STATUSES.has(patch.status)) throw new Error("lane status must be active | blocked | done | archived");
-      if (patch.status === "archived") {
+      if (!LANE_STATUSES.has(patch.status)) throw new Error("lane status must be active | done | archived");
+      if (patch.status === "done" || patch.status === "archived") {
         const state = analyze(readEntries(current.worklog));
-        if (state.batonHeld) throw new Error(`Lane "${current.id}" holds a baton and cannot be archived — end the session or choose a non-archived status first`);
+        if (state.batonHeld) throw new Error(`Lane "${current.id}" holds a baton and cannot become ${patch.status} — end the session first`);
+        if (state.openIntents.length) {
+          throw new Error(`Lane "${current.id}" has ${state.openIntents.length} open intent(s) and cannot become ${patch.status} — promote or otherwise reconcile them first`);
+        }
+        const issues = [...state.validation.errors, ...state.validation.warnings];
+        if (issues.length) {
+          throw new Error(`Lane "${current.id}" does not pass strict verification and cannot become ${patch.status} — run \`ahp verify --lane ${current.id}\``);
+        }
       }
       candidate.status = patch.status;
     }
@@ -225,11 +235,11 @@ export function edit(project, wanted, patch) {
     candidate.updated = new Date().toISOString();
     data.lanes[current.id] = candidate;
     return enrich(project, current.id, candidate);
-  }, { worklogLock: patch.status === "archived" ? current.lock : null });
+  }, { worklogLock: patch.status != null ? current.lock : null });
 }
 
-export function formatChoices(lanes) {
-  const lines = ["Lane selection is ambiguous:"];
+export function formatChoices(lanes, { heading = "Lane selection is ambiguous:" } = {}) {
+  const lines = [heading];
   lanes.forEach((lane, index) => {
     lines.push(`  ${index + 1}. ${lane.id} — ${lane.title} [${lane.status}]`);
     if (lane.description) lines.push(`     ${lane.description.slice(0, 120)}`);
@@ -237,6 +247,12 @@ export function formatChoices(lanes) {
     if (lane.aliases.length) lines.push(`     aliases: ${lane.aliases.join(", ").slice(0, 120)}`);
   });
   lines.push(`  ${lanes.length + 1}. Create a new Lane`);
+  if (lanes.some((lane) => lane.status === "done")) {
+    lines.push("A done Lane reopens only through an explicit `ahp start --lane <id>`.");
+  }
+  if (lanes.some((lane) => lane.status === "blocked")) {
+    lines.push("A legacy blocked Lane must first be edited to active or done.");
+  }
   lines.push("Use task context to choose with --lane <id>, or create a Lane when none matches; ask the operator only if genuinely uncertain.");
   return lines.join("\n");
 }

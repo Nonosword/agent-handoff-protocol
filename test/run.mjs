@@ -731,7 +731,7 @@ test("write commands require a Lane while first start may create it", () => {
   assert.equal(early.code, 1);
   assert.match(early.err, /no Lane exists.*ahp start.*ahp lane create/);
   assert.equal(ahp(["status"], P).code, 0);
-  assert.match(ahp(["lane", "list"], P).out, /no Lanes/);
+  assert.match(ahp(["lane", "list"], P).out, /no active or done Lanes/);
 });
 
 test("Lanes auto-create once, preserve shared commit links, and require a choice when ambiguous", () => {
@@ -766,9 +766,9 @@ test("Lanes auto-create once, preserve shared commit links, and require a choice
   assert.equal(alphaRecords.find((record) => record.type === "intent.promote").commits[0], shared);
   assert.equal(betaRecords.find((record) => record.type === "intent.promote").commits[0], shared);
 
-  const edited = ahp(["lane", "edit", "beta", "--title", "Beta revised", "--status", "blocked"], P);
+  const edited = ahp(["lane", "edit", "beta", "--title", "Beta revised", "--status", "done"], P);
   assert.equal(edited.code, 0, edited.err);
-  assert.match(ahp(["lane", "list"], P).out, /beta\s+Beta revised\s+\[blocked\]/);
+  assert.match(ahp(["lane", "list"], P).out, /beta\s+Beta revised\s+\[done\]/);
 
   const collision = ahp(["lane", "edit", "alpha-work", "--alias", "beta"], P);
   assert.equal(collision.code, 1);
@@ -802,12 +802,12 @@ test("Lane registry supports Unicode ids, reclaims stale locks, and rejects unsa
   assert.match(unsafe.err, /AHP_LANES_INVALID.*canonical safe id/);
 });
 
-test("a held Lane cannot be archived, and project names remain unambiguous", () => {
+test("a held Lane cannot be completed, and project names remain unambiguous", () => {
   const P = mkrepo("projHeldArchive");
   assert.equal(ahp(["start", "--plan", "held archive", "--gate", "pass", "--evidence", "e"], P).code, 0);
   const held = ahp(["lane", "edit", "held-archive", "--status", "archived"], P);
   assert.equal(held.code, 1);
-  assert.match(held.err, /holds a baton.*cannot be archived/);
+  assert.match(held.err, /holds a baton.*cannot become archived/);
   assert.equal(ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "e"], P).code, 0);
   assert.equal(ahp(["lane", "edit", "held-archive", "--status", "archived"], P).code, 0);
 
@@ -830,6 +830,79 @@ test("a held Lane cannot be archived, and project names remain unambiguous", () 
   const ambiguous = ahp(["status", "--project", "legacy-duplicate"], A);
   assert.equal(ambiguous.code, 1);
   assert.match(ambiguous.err, /project name "legacy-duplicate" is ambiguous.*Use an explicit project id/);
+});
+
+test("Lane lifecycle keeps done discoverable, reopens it explicitly, and hides archived history", () => {
+  const P = mkrepo("projLaneLifecycle");
+  assert.equal(ahp(["start", "--plan", "lifecycle work", "--gate", "pass", "--evidence", "e"], P).code, 0);
+
+  const heldDone = ahp(["lane", "edit", "lifecycle-work", "--status", "done"], P);
+  assert.equal(heldDone.code, 1);
+  assert.match(heldDone.err, /holds a baton.*cannot become done/);
+
+  assert.equal(ahp(["intent", "open", "--id", "life", "--title", "life", "--intended", "finish lifecycle", "--lane", "lifecycle-work"], P).code, 0);
+  const sha = commit(P, "lifecycle commit");
+  assert.equal(ahp(["end", "--reason", "limit", "--summary", "intent remains open", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P).code, 0);
+  const openDone = ahp(["lane", "edit", "lifecycle-work", "--status", "done"], P);
+  assert.equal(openDone.code, 1);
+  assert.match(openDone.err, /has 1 open intent.*cannot become done/);
+
+  assert.equal(ahp(["start", "--plan", "finish lifecycle", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P).code, 0);
+  assert.equal(ahp(["intent", "promote", "--id", "life", "--commit", sha, "--gate", "pass", "--actual", "finished", "--lane", "lifecycle-work"], P).code, 0);
+  assert.equal(ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P).code, 0);
+  assert.equal(ahp(["lane", "edit", "lifecycle-work", "--status", "done"], P).code, 0);
+
+  assert.match(ahp(["lane", "list"], P).out, /lifecycle-work\s+lifecycle work\s+\[done\]/);
+  const status = ahp(["status", "--json"], P);
+  assert.equal(status.code, 0, status.err);
+  assert.equal(JSON.parse(status.out).lane.status, "done");
+
+  const implicitStart = ahp(["start", "--plan", "unrelated work", "--gate", "pass", "--evidence", "e"], P);
+  assert.equal(implicitStart.code, 1);
+  assert.match(implicitStart.err, /No active Lane is available[\s\S]*lifecycle-work.*\[done\][\s\S]*Create a new Lane[\s\S]*explicit `ahp start --lane/);
+  const writeDone = ahp(["intent", "open", "--id", "late", "--title", "late", "--intended", "late", "--lane", "lifecycle-work"], P);
+  assert.equal(writeDone.code, 1);
+  assert.match(writeDone.err, /Lane "lifecycle-work" is done/);
+
+  const reopened = ahp(["start", "--plan", "reopen deliberately", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P);
+  assert.equal(reopened.code, 0, reopened.err);
+  assert.match(reopened.out, /lane\.reopened lifecycle-work[\s\S]*handoff\.start/);
+  assert.equal(ahp(["end", "--reason", "task-done", "--summary", "reopened work done", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P).code, 0);
+  assert.equal(ahp(["lane", "edit", "lifecycle-work", "--status", "done"], P).code, 0);
+  assert.equal(ahp(["lane", "edit", "lifecycle-work", "--status", "archived"], P).code, 0);
+
+  assert.doesNotMatch(ahp(["lane", "list"], P).out, /lifecycle-work/);
+  assert.match(ahp(["lane", "list", "--all"], P).out, /lifecycle-work\s+lifecycle work\s+\[archived\]/);
+  assert.deepEqual(JSON.parse(ahp(["lane", "list", "--json"], P).out), []);
+  assert.equal(JSON.parse(ahp(["lane", "list", "--all", "--json"], P).out)[0].status, "archived");
+  const archivedStart = ahp(["start", "--plan", "must unarchive", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P);
+  assert.equal(archivedStart.code, 1);
+  assert.match(archivedStart.err, /is archived/);
+  assert.equal(ahp(["lane", "edit", "lifecycle-work", "--status", "active"], P).code, 0);
+
+  const projectPath = ahp(["project", "current"], P).out.split("\n")[1];
+  const projectDir = path.dirname(projectPath);
+  const registryFile = path.join(projectDir, "lanes.json");
+  const registry = JSON.parse(fs.readFileSync(registryFile, "utf8"));
+  registry.lanes["lifecycle-work"].status = "blocked";
+  fs.writeFileSync(registryFile, JSON.stringify(registry));
+  assert.match(ahp(["lane", "list"], P).out, /lifecycle-work\s+lifecycle work\s+\[blocked\]/);
+  const blockedStart = ahp(["start", "--plan", "legacy blocked", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P);
+  assert.equal(blockedStart.code, 1);
+  assert.match(blockedStart.err, /legacy status "blocked"/);
+  assert.equal(ahp(["lane", "edit", "lifecycle-work", "--status", "active"], P).code, 0);
+
+  const legacyBlocked = ahp(["lane", "edit", "lifecycle-work", "--status", "blocked"], P);
+  assert.equal(legacyBlocked.code, 1);
+  assert.match(legacyBlocked.err, /active \| done \| archived/);
+
+  const worklog = path.join(projectDir, "lanes", "lifecycle-work", "worklog.jsonl");
+  const records = fs.readFileSync(worklog, "utf8").trim().split("\n").map(JSON.parse);
+  delete records[0].plan;
+  fs.writeFileSync(worklog, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  const invalidDone = ahp(["lane", "edit", "lifecycle-work", "--status", "done"], P);
+  assert.equal(invalidDone.code, 1);
+  assert.match(invalidDone.err, /does not pass strict verification/);
 });
 
 test("pickup is compact by default and --full expands omitted commits", () => {
@@ -937,6 +1010,28 @@ test("dashboard watcher survives startup before its store directory exists", () 
   assert.equal(result.stdout.trim(), "changed");
 });
 
+test("dashboard expands active Lanes, compacts done Lanes, and omits archived Lanes", () => {
+  const P = mkrepo("projDashboardLifecycle");
+  assert.equal(ahp(["start", "--plan", "dashboard lifecycle unique", "--gate", "pass", "--evidence", "e"], P).code, 0);
+  assert.equal(ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "e"], P).code, 0);
+  assert.equal(ahp(["lane", "edit", "dashboard-lifecycle-unique", "--status", "done"], P).code, 0);
+  assert.equal(ahp(["lane", "create", "--id", "dashboard-active-unique", "--title", "Dashboard active unique", "--description", "active Dashboard Lane"], P).code, 0);
+  assert.equal(JSON.parse(ahp(["status", "--json"], P).out).lane.id, "dashboard-active-unique", "the sole active Lane must take precedence over done history");
+
+  const humanDone = ahp(["dashboard"], P);
+  assert.match(humanDone.out, /✓ 1 done · ahp lane list to inspect/);
+  assert.doesNotMatch(humanDone.out, /dashboard lifecycle unique/);
+  assert.match(humanDone.out, /Dashboard active unique\s+empty/);
+
+  const jsonDone = ahp(["dashboard", "--json"], P);
+  const doneProject = JSON.parse(jsonDone.out).projects.find((item) => item.name === "projDashboardLifecycle");
+  assert.deepEqual(doneProject.lanes.map((lane) => lane.status).sort(), ["active", "done"]);
+
+  assert.equal(ahp(["lane", "edit", "dashboard-lifecycle-unique", "--status", "archived"], P).code, 0);
+  const archivedProject = JSON.parse(ahp(["dashboard", "--json"], P).out).projects.find((item) => item.name === "projDashboardLifecycle");
+  assert.deepEqual(archivedProject.lanes.map((lane) => lane.id), ["dashboard-active-unique"]);
+});
+
 test("MCP Lane tools create, list, and edit the same project metadata", () => {
   const P = mkrepo("projLaneMcp");
   const call = (id, name, args) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: { ...args, cwd: P } } });
@@ -944,13 +1039,20 @@ test("MCP Lane tools create, list, and edit the same project metadata", () => {
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: {}, clientInfo: { name: "codex" } } },
     call(2, "ahp_lane_create", { id: "api", title: "API work", description: "API Lane", scope: ["src/api/**"], aliases: ["backend"] }),
     call(3, "ahp_lane_list", {}),
-    call(4, "ahp_lane_edit", { lane: "api", title: "API revised", status: "blocked" })
+    call(4, "ahp_lane_edit", { lane: "api", title: "API revised", status: "done" }),
+    call(5, "ahp_lane_list", {}),
+    call(6, "ahp_lane_edit", { lane: "api", status: "archived" }),
+    call(7, "ahp_lane_list", {}),
+    call(8, "ahp_lane_list", { all: true })
   ].map((message) => JSON.stringify(message)).join("\n") + "\n";
   const result = spawnSync(process.execPath, [MCP], { input: messages, env: ENV, encoding: "utf8", shell: false });
   const byId = new Map(result.stdout.trim().split("\n").map((line) => JSON.parse(line)).map((message) => [message.id, message]));
-  for (const id of [2, 3, 4]) assert.equal(byId.get(id).result.isError, false, byId.get(id).result.content[0].text);
+  for (const id of [2, 3, 4, 5, 6, 7, 8]) assert.equal(byId.get(id).result.isError, false, byId.get(id).result.content[0].text);
   assert.match(byId.get(3).result.content[0].text, /api\s+API work/);
-  assert.match(byId.get(4).result.content[0].text, /API revised \[blocked\]/);
+  assert.match(byId.get(4).result.content[0].text, /API revised \[done\]/);
+  assert.match(byId.get(5).result.content[0].text, /api\s+API revised\s+\[done\]/);
+  assert.doesNotMatch(byId.get(7).result.content[0].text, /API revised/);
+  assert.match(byId.get(8).result.content[0].text, /api\s+API revised\s+\[archived\]/);
 });
 
 test("MCP server: initialize + tools/list + tools/call", () => {

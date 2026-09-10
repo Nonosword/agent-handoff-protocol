@@ -23,16 +23,22 @@ Git unchanged. Preserve the exact error, do only read-only diagnosis, follow its
 permission/mount/sandbox guidance, then retry. Never silently switch to an
 in-repo worklog or proceed from memory.
 
-Resolve the Lane before the first change. Run `ahp lane list` when more than one
-exists. If the task clearly matches an id/title/description/scope/alias, select
+Resolve the Lane before the first change. Run `ahp lane list` to discover active
+and done work. If the task clearly matches an id/title/description/scope/alias, select
 it with `--lane <id>` (or the MCP `lane` field) without asking. If none matches,
 create one with a concise title, description and scope. If several remain
-plausible, show the listed Lanes plus New Lane and ask the user. With no Lane,
-`start` creates one from its plan; a sole Lane or the sole Lane held by you is
-automatically selected. Carry the same explicit Lane through `pickup`, `start`
+plausible, show the listed Lanes plus New Lane and ask the user. With no active
+or done Lane, `start` creates one from its plan; a sole active Lane or the sole
+active Lane held by you is automatically selected. Carry the same explicit Lane through `pickup`, `start`
 and later writes. Do not create a near-duplicate Lane. Only the selected Lane's current baton
 holder may write an intent or `handoff.end`; a different worker must pickup and
 start a new session before completing inherited work.
+
+Default Lane discovery includes `active` and `done`; use `lane list --all` only
+when archived history matters. Prefer active Lanes. Reopen a done Lane only with
+an explicit `start --lane <id>`. Archived Lanes must be explicitly restored to
+`active` or `done`; never archive by age. Legacy `blocked` Lane metadata is
+read-only compatibility, not a status to set for new work.
 
 At the start of a session, before editing anything:
   1. Run `ahp pickup` for the selected Lane. It shows the last handoff, a
