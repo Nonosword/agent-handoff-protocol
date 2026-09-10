@@ -136,7 +136,9 @@ Changing a Lane to `done` or `archived` requires a free baton, no open intents,
 and a clean strict verification result. AHP never archives by age. Historical
 `blocked` registry values remain readable but must be changed to `active` or
 `done` before new writes. Agents propose concise Lane descriptions; humans may
-edit them.
+edit them. The synthetic `main / legacy` Lane has the same lifecycle controls;
+only its fixed title, description, scope, aliases, id, and historical worklog
+path remain immutable.
 A commit may legitimately be promoted by intents in multiple Lanes: AHP records
 associations, not commit ownership, and performs no semantic commit deduplication.
 The agent still decides whether the work needs its own branch/worktree or can

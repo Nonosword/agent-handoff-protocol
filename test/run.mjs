@@ -905,6 +905,39 @@ test("Lane lifecycle keeps done discoverable, reopens it explicitly, and hides a
   assert.match(invalidDone.err, /does not pass strict verification/);
 });
 
+test("the synthetic legacy main Lane shares lifecycle status without changing identity or routing", () => {
+  const P = mkrepo("projLegacyMainLifecycle");
+  assert.equal(ahp(["project", "add"], P).code, 0);
+  const mainWorklog = ahp(["project", "current"], P).out.split("\n")[1];
+  fs.mkdirSync(path.dirname(mainWorklog), { recursive: true });
+  fs.copyFileSync(path.join(REPO, "examples", "solo.jsonl"), mainWorklog);
+
+  assert.match(ahp(["lane", "list"], P).out, /main\s+Main \/ legacy\s+\[active\]/);
+  assert.equal(ahp(["path", "--lane", "main"], P).out, mainWorklog);
+  const completed = ahp(["lane", "edit", "main", "--status", "done"], P);
+  assert.equal(completed.code, 0, completed.err);
+  assert.match(ahp(["lane", "list"], P).out, /main\s+Main \/ legacy\s+\[done\]/);
+  assert.equal(ahp(["path", "--lane", "main"], P).out, mainWorklog, "materialized status must not reroute the legacy worklog");
+
+  const renamed = ahp(["lane", "edit", "main", "--title", "Not main"], P);
+  assert.equal(renamed.code, 1);
+  assert.match(renamed.err, /fixed identity metadata/);
+  const collision = ahp(["lane", "create", "--id", "main", "--title", "Another main", "--description", "must not overlap"], P);
+  assert.equal(collision.code, 1);
+  assert.match(collision.err, /overlaps an existing/);
+
+  const reopened = ahp(["start", "--lane", "main", "--plan", "legacy follow-up", "--gate", "pass", "--evidence", "e"], P);
+  assert.equal(reopened.code, 0, reopened.err);
+  assert.match(reopened.out, /lane\.reopened main[\s\S]*handoff\.start/);
+  const ended = ahp(["end", "--lane", "main", "--reason", "task-done", "--summary", "legacy complete", "--gate", "pass", "--evidence", "e"], P);
+  assert.equal(ended.code, 0, ended.err);
+  const archived = ahp(["lane", "edit", "main", "--status", "archived"], P);
+  assert.equal(archived.code, 0, archived.err);
+  assert.doesNotMatch(ahp(["lane", "list"], P).out, /Main \/ legacy/);
+  assert.match(ahp(["lane", "list", "--all"], P).out, /main\s+Main \/ legacy\s+\[archived\]/);
+  assert.equal(ahp(["path", "--lane", "main"], P).out, mainWorklog);
+});
+
 test("pickup is compact by default and --full expands omitted commits", () => {
   const P = mkrepo("projPickupLimit");
   ahp(["start", "--plan", "bounded pickup", "--gate", "pass", "--evidence", "e"], P);

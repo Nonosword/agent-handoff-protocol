@@ -7,6 +7,12 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.7.1 — 2026-09-10
+
+- Extended the Lane lifecycle to the synthetic `main / legacy` Lane. Its
+  active/done/archived status can now be persisted without changing its fixed
+  identity or routing the historical project-wide worklog into `lanes/main`.
+
 ## 0.7.0 — 2026-09-10
 
 - Added the explicit Lane lifecycle `active` → `done` → `archived`. Completion

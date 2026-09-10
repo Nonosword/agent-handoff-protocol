@@ -127,7 +127,9 @@ The records and procedures are identical under either binding:
   touched at all. This is what the reference `ahp` implementation uses by
   default, at `$XDG_DATA_HOME/agent-handoff/` (falling back to
   `~/.local/share/agent-handoff/`). A pre-Lane project worklog is exposed as the
-  synthetic `main` Lane.
+  synthetic `main` Lane. An implementation MAY persist lifecycle metadata for
+  that synthetic Lane, but MUST keep its identity fixed and continue routing it
+  to the project-wide worklog rather than a named-Lane path.
 
 A worker does not need to know which binding is in effect; it asks the
 implementation for the selected Lane's worklog.

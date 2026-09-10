@@ -12,6 +12,13 @@ export const LEGACY_LANE_TITLE = "Main / legacy";
 // it so historical registries remain usable, but never offer it as a new state.
 export const LANE_STATUSES = new Set(["active", "done", "archived"]);
 const STORED_LANE_STATUSES = new Set([...LANE_STATUSES, "blocked"]);
+const LEGACY_LANE_METADATA = {
+  title: LEGACY_LANE_TITLE,
+  description: "Project-wide records written before Lane support.",
+  scope: [],
+  aliases: [],
+  status: "active"
+};
 
 const laneFile = (project) => path.join(project.dir, "lanes.json");
 const normalized = (value) => String(value ?? "").normalize("NFKC").trim().toLowerCase()
@@ -138,13 +145,11 @@ function enrich(project, id, entry, legacy = false) {
 
 export function list(project, { includeArchived = false } = {}) {
   const data = loadFile(project);
-  const rows = Object.entries(data.lanes).map(([id, entry]) => enrich(project, id, entry));
-  if (hasLegacyWorklog(project) && !data.lanes[LEGACY_LANE_ID]) {
-    rows.unshift(enrich(project, LEGACY_LANE_ID, {
-      title: LEGACY_LANE_TITLE,
-      description: "Project-wide records written before Lane support.",
-      status: "active"
-    }, true));
+  const rows = Object.entries(data.lanes)
+    .filter(([id]) => id !== LEGACY_LANE_ID)
+    .map(([id, entry]) => enrich(project, id, entry));
+  if (hasLegacyWorklog(project) || data.lanes[LEGACY_LANE_ID]) {
+    rows.unshift(enrich(project, LEGACY_LANE_ID, data.lanes[LEGACY_LANE_ID] ?? LEGACY_LANE_METADATA, true));
   }
   return includeArchived ? rows : rows.filter((lane) => lane.status !== "archived");
 }
@@ -193,9 +198,11 @@ export function create(project, { id, title, description, scope = [], aliases = 
 export function edit(project, wanted, patch) {
   const current = find(project, wanted);
   if (!current) throw new Error("unknown Lane: " + wanted);
-  if (current.legacy) throw new Error("the synthetic main Lane cannot be edited; create a named Lane for new work");
+  if (current.legacy && [patch.title, patch.description, patch.scope, patch.aliases].some((value) => value != null)) {
+    throw new Error("the synthetic main Lane has fixed identity metadata; only its lifecycle status can be edited");
+  }
   return mutateFile(project, (data) => {
-    const entry = data.lanes[current.id];
+    const entry = data.lanes[current.id] ?? { ...LEGACY_LANE_METADATA };
     const candidate = {
       ...entry,
       ...(patch.title != null ? { title: String(patch.title).trim() } : {}),
@@ -225,7 +232,7 @@ export function edit(project, wanted, patch) {
       if (id === current.id) continue;
       for (const value of [id, other.title, ...(other.aliases ?? [])]) otherKeys.add(normalized(value));
     }
-    if (hasLegacyWorklog(project)) {
+    if (hasLegacyWorklog(project) && current.id !== LEGACY_LANE_ID) {
       otherKeys.add(LEGACY_LANE_ID);
       otherKeys.add(normalized(LEGACY_LANE_TITLE));
     }
@@ -234,7 +241,7 @@ export function edit(project, wanted, patch) {
     }
     candidate.updated = new Date().toISOString();
     data.lanes[current.id] = candidate;
-    return enrich(project, current.id, candidate);
+    return enrich(project, current.id, candidate, current.legacy);
   }, { worklogLock: patch.status != null ? current.lock : null });
 }
 

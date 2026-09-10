@@ -59,6 +59,8 @@ Use `active` for current work, `done` for completed but discoverable work, and
 explicit `start --lane <done-id>` reopens a done Lane; archived Lanes must first
 be unarchived with `lane edit`. Completion requires a free baton, no open
 intents, and strict verification. There is no age-based auto-archive.
+The synthetic `main / legacy` Lane supports the same status changes, but keeps
+its fixed identity and historical project-wide worklog path.
 
 ## Seeing everything at once
 
