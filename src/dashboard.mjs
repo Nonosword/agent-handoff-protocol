@@ -101,6 +101,7 @@ function toJson(rows, version, home) {
         scope: lane.scope,
         aliases: lane.aliases,
         status: lane.status,
+        verificationDisposition: lane.verificationDisposition ?? null,
         baton: lane.analysis?.baton ? { ...lane.analysis.baton, plan: lane.analysis.lastStart?.plan ?? null } : null,
         records: lane.analysis?.count ?? 0,
         lastSeq: lane.analysis?.lastSeq ?? 0,
@@ -111,6 +112,10 @@ function toJson(rows, version, home) {
       }))
     }))
   };
+}
+
+function laneFailsStrictVerification(lane) {
+  return !!(lane.readError || lane.analysis?.validation.errors.length || lane.analysis?.validation.warnings.length);
 }
 
 function render(rows, home, { footer = "", version = null } = {}) {
@@ -179,7 +184,7 @@ function render(rows, home, { footer = "", version = null } = {}) {
       }
     }
     if (compactDone.length) {
-      const invalidDone = compactDone.filter((lane) => lane.readError || lane.analysis?.validation.errors.length || lane.analysis?.validation.warnings.length);
+      const invalidDone = compactDone.filter(laneFailsStrictVerification);
       out.push(`    ${c.subtle(`✓ ${compactDone.length} done · ahp lane list to inspect`)}`);
       if (invalidDone.length) {
         anyError = true;
@@ -354,7 +359,7 @@ export async function dashboard({ home, version = null, json = false, watch = fa
   if (json) {
     const rows = snapshot(home);
     process.stdout.write(`${JSON.stringify(toJson(rows, version, home), null, 2)}\n`);
-    return rows.some((row) => row.laneError || row.lanes.some((lane) => lane.readError || lane.analysis?.validation.errors.length)) ? 1 : 0;
+    return rows.some((row) => row.laneError || row.lanes.some(laneFailsStrictVerification)) ? 1 : 0;
   }
 
   if (!watch || !process.stdout.isTTY) {

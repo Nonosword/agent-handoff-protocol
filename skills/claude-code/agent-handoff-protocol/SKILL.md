@@ -40,8 +40,11 @@ it with `--lane <id>` (or the MCP `lane` field) without asking. If none matches,
 create one with a concise title, description and scope. If several remain
 plausible, show the listed Lanes plus New Lane and ask the user. With no active
 or done Lane, `start` creates one from its plan; a sole active Lane or the sole
-active Lane held by you is automatically selected. Carry the same explicit Lane through `pickup`, `start`
-and later writes. Do not create a near-duplicate Lane.
+active Lane held by you is automatically selected. Carry the same explicit Lane
+through `pickup`, `start` and later writes. Do not create a near-duplicate Lane.
+Outside a checkout, discover registered Projects with MCP `ahp_project_list` or
+CLI `ahp project list`; never invent an id. MCP calls carry the same
+`project`/`cwd` and `lane` fields as the complete CLI examples below.
 
 Default Lane discovery includes `active` and `done`; use `lane list --all` only
 when archived history matters. Prefer active Lanes. A done Lane stays visible to
@@ -53,7 +56,7 @@ read-only compatibility; record a blocked session with `handoff.end` instead.
 ## At the start of a session — PICKUP (do this before any change)
 
 ```
-ahp pickup
+ahp pickup --lane <id>
 ```
 
 Read its output. The default is intentionally compact: it prioritises unmatched
@@ -67,7 +70,7 @@ project's own gate (tests / lint / build) yourself — don't trust the recorded
 result. Then take the baton:
 
 ```
-ahp start --plan "<what you intend to do>" --gate pass --evidence "<proof, e.g. 200 tests pass>"
+ahp start --lane <id> --plan "<what you intend to do>" --gate pass --evidence "<proof, e.g. 200 tests pass>"
 ```
 
 (Set `--gate fail` or `--gate not-run` honestly if that's the case.)
@@ -77,13 +80,13 @@ ahp start --plan "<what you intend to do>" --gate pass --evidence "<proof, e.g. 
 Before starting a unit of work:
 
 ```
-ahp intent open --id i-<date>-<letter> --title "<short>" --intended "<what and why>" --scope "<glob>"
+ahp intent open --lane <id> --id i-<date>-<letter> --title "<short>" --intended "<what and why>" --scope "<glob>"
 ```
 
 After its commit lands and the gate passes:
 
 ```
-ahp intent promote --id i-<date>-<letter> --commit <sha> --gate pass \
+ahp intent promote --lane <id> --id i-<date>-<letter> --commit <sha> --gate pass \
   --actual "<what you actually did>" --landmine "<a hazard>" --next "<the follow-up>"
 ```
 
@@ -110,11 +113,23 @@ if it needs to survive, it is not a landmine, it is documentation.
 ## When stopping — DROP (best-effort; you may be cut off first)
 
 ```
-ahp end --reason limit --summary "<what happened this session>" --gate pass --evidence "<proof>"
+ahp end --lane <id> --reason limit --summary "<what happened this session>" --gate pass --evidence "<proof>"
 ```
 
 Use `--finding "<hazard>"` (repeatable) for anything the next agent must know;
 it is required if `--gate` is not `pass`.
+
+When the whole Lane is complete, rather than merely rotating this session:
+
+```
+ahp end --lane <id> --reason task-done --summary "<completed outcome>" --gate pass --evidence "<proof>"
+ahp lane edit <id> --status done
+```
+
+`handoff.end` releases only the session baton; it never changes Lane status.
+Never archive automatically. Invalid immutable history requires an
+operator-reviewed CLI `--operator-disposition`; an agent must never invent or
+apply one.
 
 ## Other
 

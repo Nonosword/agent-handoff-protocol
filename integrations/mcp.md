@@ -95,7 +95,7 @@ On macOS the bundled CLI is normally
 MCP config is `~/.qoder-cn/mcp.json`.
 
 The tools appear as `ahp_status`, `ahp_pickup`, `ahp_start`, `ahp_intent_open`,
-`ahp_intent_promote`, `ahp_end`, `ahp_read`, `ahp_verify`, plus
+`ahp_intent_promote`, `ahp_end`, `ahp_project_list`, `ahp_read`, `ahp_verify`,
 `ahp_lane_list`, `ahp_lane_create`, and `ahp_lane_edit`.
 
 ## Any MCP host
@@ -112,6 +112,21 @@ on every project-scoped MCP call (or use a registered `project` id/name).
 Desktop launches its stdio server independently of the chat UI, so the server
 cannot infer a repository from the visible conversation. Once the Project has
 multiple Lanes, also pass its matching `lane`.
+If the checkout path is unavailable, call `ahp_project_list` first and use one
+of its registered ids. Never invent a Project id: writes reject unknown ids so
+they cannot create state hidden from the Dashboard.
+
+Complete call context looks like this inside a checkout:
+
+```json
+{"cwd":"/absolute/path/to/repo","lane":"lane-id"}
+```
+
+Or, when a Desktop agent only has registered store context:
+
+```json
+{"project":"registered-project-id","lane":"lane-id"}
+```
 
 ## Tools
 
@@ -123,6 +138,7 @@ multiple Lanes, also pass its matching `lane`.
 | `ahp_intent_open` | declare a unit of work |
 | `ahp_intent_promote` | record its commit landed (`actual` / `landmines` / `next`) |
 | `ahp_end` | append `handoff.end` (best-effort) |
+| `ahp_project_list` | discover registered Project ids/names/roots from anywhere |
 | `ahp_read` | read records, or project one field (`field:"hazards"` = landmines + findings) |
 | `ahp_verify` | validate the selected Lane worklog |
 | `ahp_lane_list` | list active + done Lanes; `all:true` also returns archived history |
@@ -134,9 +150,14 @@ multiple Lanes, also pass its matching `lane`.
 Whichever host: tell the agent to resolve the Project and Lane first. It should
 select a clear Lane match itself, create one only when none matches, and ask the
 operator only for genuine ambiguity. Then call `ahp_pickup`, reconcile, and
-`ahp_start`; use one intent per commit and `ahp_end` when stopping.
+`ahp_start`; use one intent per commit and `ahp_end` when stopping. Carry the
+same `cwd`/`project` and `lane` fields on every project-scoped call.
 
 Lifecycle status is `active`, `done`, or `archived`. Done Lanes stay visible to
 prevent accidental duplicates and reopen only through an explicit `ahp_start`
 with their `lane`. Archived Lanes are hidden unless `ahp_lane_list` receives
 `all:true`; change their status explicitly before reuse.
+`ahp_end` only releases a session baton. After a genuinely completed Lane uses
+`reason:"task-done"`, set that Lane to `done` separately. Invalid immutable
+history requires an operator-reviewed CLI disposition and cannot be bypassed
+through MCP.

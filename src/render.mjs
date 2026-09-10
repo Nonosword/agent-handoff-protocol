@@ -1,4 +1,5 @@
-// Human-readable rendering for `ahp status`, `ahp pickup`, `ahp log`.
+// Human-readable rendering for Lane-scoped `ahp status --lane <id>`,
+// `ahp pickup --lane <id>`, and `ahp log --lane <id>` calls.
 
 function workerLabel(worker) {
   if (!worker) return "?";
@@ -17,6 +18,10 @@ function ago(iso) {
   return `${Math.round(h / 24)}d ago`;
 }
 
+function laneArg(project) {
+  return project.lane ? ` --lane ${project.lane.id}` : "";
+}
+
 export function renderStatus({ project, git: g, analysis }) {
   const L = [];
   L.push(`project   ${project.name}  [${project.id}]`);
@@ -26,7 +31,7 @@ export function renderStatus({ project, git: g, analysis }) {
   L.push(`head      ${g.short ?? "?"}   tree ${g.clean === null ? "?" : g.clean ? "clean" : "DIRTY"}`);
   L.push("");
   if (analysis.count === 0) {
-    L.push("worklog   empty — run `ahp start --plan \"…\"` to take the baton");
+    L.push(`worklog   empty — run \`ahp start${laneArg(project)} --plan "…" --gate pass|fail|not-run\` to take the baton`);
     return L.join("\n");
   }
   const s = analysis.lastStart;
@@ -34,13 +39,13 @@ export function renderStatus({ project, git: g, analysis }) {
   const b = analysis.baton;
   if (!b) {
     L.push(`baton     never taken — ${analysis.count} record(s) but no handoff.start`);
-    L.push("          run `ahp pickup` then `ahp start`");
+    L.push(`          run \`ahp pickup${laneArg(project)}\` then \`ahp start${laneArg(project)} --plan "…" --gate pass|fail|not-run\``);
   } else if (analysis.batonHeld) {
     L.push(`baton     HELD by ${workerLabel(analysis.batonWorker)}  (since ${ago(s.at)})`);
     L.push(`          session ${b.sessionId}  ·  plan: ${s.plan}`);
   } else {
     L.push(`baton     free — session ${b.sessionId} by ${workerLabel(lastRec?.worker ?? s?.worker)} ended ${lastRec ? ago(lastRec.at) : "?"}`);
-    L.push("          run `ahp pickup` then `ahp start`");
+    L.push(`          run \`ahp pickup${laneArg(project)}\` then \`ahp start${laneArg(project)} --plan "…" --gate pass|fail|not-run\``);
   }
   L.push(`records   ${analysis.count}   last seq ${analysis.lastSeq}`);
   if (analysis.openIntents.length) {
@@ -64,7 +69,7 @@ export function renderPickup({ project, git: g, analysis, sinceCommits, reconcil
   lines.push("");
   if (analysis.count === 0) {
     lines.push("Worklog is empty. This is a fresh start.");
-    lines.push("Next: `ahp start --plan \"…\" --gate pass|fail|not-run`");
+    lines.push(`Next: \`ahp start${laneArg(project)} --plan "…" --gate pass|fail|not-run\``);
     return lines.join("\n");
   }
   if (selfHistory) {
@@ -75,7 +80,7 @@ export function renderPickup({ project, git: g, analysis, sinceCommits, reconcil
   const start = analysis.lastStart;
   if (!start) {
     lines.push("No handoff.start yet — " + analysis.count + " record(s) written without one.");
-    lines.push("Inspect them with `ahp log`, then start the Lane.");
+    lines.push(`Inspect them with \`ahp log${laneArg(project)}\`, then start the Lane.`);
     return lines.join("\n");
   }
 
@@ -112,9 +117,9 @@ export function renderPickup({ project, git: g, analysis, sinceCommits, reconcil
     lines.push("  " + commit.short + "  " + commit.subject + (links.length ? "   ✓ " + links.join(", ") : "   ⚠ unmatched"));
   }
   const omittedCommits = sinceCommits.length - visibleCommits.length;
-  if (omittedCommits > 0) lines.push("  … " + omittedCommits + " commit(s) omitted from the compact view; run `ahp pickup --full` if needed.");
+  if (omittedCommits > 0) lines.push("  … " + omittedCommits + ` commit(s) omitted from the compact view; run \`ahp pickup${laneArg(project)} --full\` if needed.`);
   if (!full && unmatched.length > 8) {
-    lines.push("  ⚠ " + (unmatched.length - 8) + " unmatched commit(s) omitted; run `ahp pickup --full` before starting.");
+    lines.push("  ⚠ " + (unmatched.length - 8) + ` unmatched commit(s) omitted; run \`ahp pickup${laneArg(project)} --full\` before starting.`);
   }
   lines.push("");
 
@@ -139,7 +144,7 @@ export function renderPickup({ project, git: g, analysis, sinceCommits, reconcil
     lines.push("    " + String(intent.intended ?? "").slice(0, full ? 1000 : 200));
   }
   if (analysis.openIntents.length > visibleIntents.length) {
-    lines.push("  … " + (analysis.openIntents.length - visibleIntents.length) + " omitted; run `ahp pickup --full`.");
+    lines.push("  … " + (analysis.openIntents.length - visibleIntents.length) + ` omitted; run \`ahp pickup${laneArg(project)} --full\`.`);
   }
   lines.push("");
 
@@ -148,7 +153,7 @@ export function renderPickup({ project, git: g, analysis, sinceCommits, reconcil
   for (const dirty of visibleDirty) lines.push("  " + dirty);
   if (g.dirty.length > visibleDirty.length) lines.push("  … " + (g.dirty.length - visibleDirty.length) + " path(s) omitted.");
   lines.push("");
-  lines.push("Next: reconcile the items above, run the project gate, then `ahp start --plan \"…\" --gate …`.");
+  lines.push(`Next: reconcile the items above, run the project gate, then \`ahp start${laneArg(project)} --plan "…" --gate pass|fail|not-run --evidence "<proof>"\`.`);
   return lines.join("\n");
 }
 

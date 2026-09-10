@@ -62,7 +62,7 @@ cd ~/Repositories/agent-handoff-protocol
 - **mcp**（推荐）—— 以上全部，外加把 `ahp-mcp` 注册给每个检测到的 host：Claude Code /
   Codex 用各自的 `mcp add` CLI，Cursor / VS Code / Windsurf 合并进它们的 MCP 配置文件
   （绝不动文件里其他内容），普通 Qoder 用 `mcp add` CLI，Qoder CN 则只用独立的
-`qoder-cn --add-mcp <JSON>` CLI。agent 直接调 `ahp_pickup`、
+`qoder-cn --add-mcp <JSON>` CLI。agent 直接调 `ahp_project_list`、`ahp_pickup`、
   `ahp_start` ……。结构化参数，自由文本字段不用过 shell 转义。
 
 两者都装时，agent 优先用 MCP 工具，没有则回退到 CLI。`./install.sh --mode cli|mcp`
@@ -72,16 +72,18 @@ cd ~/Repositories/agent-handoff-protocol
 
 ## 使用
 
-在任意 Git 仓库里：
+在任意 Git 仓库里，先确定匹配的 Lane（仅当不存在 active/done Lane 时，
+第一次 `start` 才可以省略 `--lane`）：
 
 ```sh
-ahp status          # 项目、谁持棒、未完成 intent、tree/gate 状态
-ahp pickup          # 默认精简接棒；确实需要全部细节时再加 --full
-ahp start   --plan "加限流" --gate pass --evidence "188 tests pass"
-ahp intent open   --id i-0828-a --title "token bucket" --intended "按 IP、耗尽返回 429"
-ahp intent promote --id i-0828-a --commit 9f2e1df --gate pass \
+ahp lane list
+ahp status  --lane rate-limiting       # 项目、持棒者、未完成 intent、tree/gate
+ahp pickup  --lane rate-limiting       # 默认精简；需要全部细节时加 --full
+ahp start   --lane rate-limiting --plan "加限流" --gate pass --evidence "188 tests pass"
+ahp intent open --lane rate-limiting --id i-0828-a --title "token bucket" --intended "按 IP、耗尽返回 429"
+ahp intent promote --lane rate-limiting --id i-0828-a --commit 9f2e1df --gate pass \
   --actual "中间件 + 6 个测试" --landmine "只在进程内" --next "改成共享缓存"
-ahp end     --reason limit --summary "3 个提交里落地了 1 个" --gate pass --evidence "194 pass"
+ahp end --lane rate-limiting --reason limit --summary "3 个提交里落地了 1 个" --gate pass --evidence "194 pass"
 ```
 
 `status`、`pickup` 等读命令不会为了识别项目而写入；第一条写命令才会自动注册。
@@ -91,16 +93,36 @@ ahp end     --reason limit --summary "3 个提交里落地了 1 个" --gate pass
 
 Project 仍自动识别；进入 Project 后按以下顺序选择 Lane：
 
-1. 没有 Lane：第一次 `ahp start` 根据 plan 自动创建。
-2. 只有一个可选 Lane，或只有一个 Lane 正由当前 worker 持棒：自动选择。
-3. 任务能明确匹配 Lane 的 id、标题、描述、scope 或 alias：agent 传
+1. `ahp lane list` 默认返回 `active` 与 `done`；只有需要隐藏的历史时才用
+   `--all` 加载 `archived`。
+2. 没有 active/done Lane：第一次 `ahp start` 根据 plan 自动创建。
+3. 只有一个 active Lane，或只有一个 active Lane 正由当前 worker 持棒：自动选择。
+4. 任务能明确匹配 Lane 的 id、标题、描述、scope 或 alias：agent 传
    `--lane <id>`（MCP 使用 `lane` 字段）。
-4. 多个 Lane 仍都有可能：AHP 列出候选和“新建 Lane”；只有 agent 无法可靠判断时，
+5. 多个 Lane 仍都有可能：AHP 列出候选和“新建 Lane”；只有 agent 无法可靠判断时，
    才请用户选择。
 
 显式选定后，`pickup`、`start` 和后续写命令应持续携带同一个 Lane；等它成为当前 worker
 唯一持棒的 Lane 后，才可安全依赖自动选择。
 可用 `ahp lane list/create/edit` 查看、创建和调整 Lane；agent 写简洁规范，用户可修改。
+Lane 生命周期是：
+
+- `active`：允许写 worklog，并在 Dashboard 展开；
+- `done`：工作已完成但默认仍可发现，避免重复创建；只有显式
+  `ahp start --lane <id>` 才会重新激活；
+- `archived`：工作已完成且默认隐藏；用 `lane list --all` 查找，再显式改回
+  `active` 或 `done`。AHP 不会按时间自动归档。
+
+改为 `done`/`archived` 前必须 baton free、没有 open intent 且 strict verify
+通过。`ahp end --reason task-done` 只释放 session baton，不会改变 Lane 状态；
+整个 Lane 完成后还要执行 `ahp lane edit <id> --status done`。若不可变的旧记录
+存在验证错误，operator 可以用 `--operator-disposition "<原因>"` 明确处置；
+AHP 会把 worklog SHA-256、被审核的问题、原因和时间写入 Lane metadata。
+这不会让 verify 假装通过，agent 也不得自行编造或使用该处置。
+
+Claude Desktop 等不继承仓库 cwd 的 host 应先调用 MCP `ahp_project_list`，再把
+返回的已注册 `project` 与同一个 `lane` 带到每次调用中；也可以始终传绝对
+`cwd`。写命令会拒绝未知 Project id，避免产生 Dashboard 看不到的孤儿记录。
 同一 commit 被不同 Lane 的 intent 引用是合法的：AHP 记录关联关系，不拥有 commit，
 也不做语义去重。是否单开 branch/worktree，还是跟随当前分支，由 agent 根据代码隔离需求
 判断；AHP 不替 Git 工作流作决定。
@@ -117,8 +139,8 @@ hard cutoff 后合法的恢复路径。
 在**任意目录**——一览所有项目：
 
 ```sh
-ahp dashboard       # 每个 Project/Lane：baton、计划、未完成 intent、verify，
-                    # 外加 branch 和短 HEAD（不扫描工作区或 git log）
+ahp dashboard       # active 展开、done 汇总、archived 隐藏；显示 baton、计划、
+                    # 未完成 intent、verify、branch 和短 HEAD
 ahp dashboard -w    # 只有状态变化才重绘；ctrl-c 退出
 ahp dashboard --json
 ```

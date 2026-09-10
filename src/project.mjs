@@ -108,8 +108,13 @@ export function resolve({ cwd = process.cwd(), project = null, env = process.env
       source: "explicit",
       operationRoot: matchingCheckout(hit.entry, cwd)
     });
-    // allow an explicit id that isn't registered yet only if it's clean
+    // Read-only inspection may address a clean, not-yet-registered id without
+    // mutating the registry. A write must never do this: it would create a
+    // project directory that `project list` and the Dashboard cannot discover.
     if (/^[a-z0-9][a-z0-9._-]*$/i.test(want)) {
+      if (registerMissing) {
+        throw new Error(`unknown registered project: ${want} — pass --cwd <checkout> to auto-register it, or run \`ahp project add\` first`);
+      }
       return descriptor(want, { name: want, remote: null, roots: [] }, home, { source: "explicit-unregistered" });
     }
     throw new Error(`unknown project: ${want} (see \`ahp project list\`)`);

@@ -25,119 +25,133 @@ const COMMON = {
   lane: { type: "string", description: "existing Lane id, title, or alias; omit only when the Project has no selection ambiguity" }
 };
 
+const schema = (properties, required = []) => ({
+  type: "object",
+  additionalProperties: false,
+  ...(required.length ? { required } : {}),
+  properties
+});
+
 const TOOLS = [
   {
     name: "ahp_status",
     description: "Selected Lane, baton holder, open intents, and current working-tree / gate state. Desktop hosts must pass the target checkout's absolute cwd, or project.",
-    inputSchema: { type: "object", properties: { ...COMMON } }
+    inputSchema: schema({ ...COMMON })
   },
   {
     name: "ahp_pickup",
     description: "Compact guided pickup for the selected Lane: last handoff, prioritised commit reconciliation and open intents. READ-ONLY. Run before taking the baton; set full only when omitted detail is needed.",
-    inputSchema: { type: "object", properties: { full: { type: "boolean", description: "include every commit, intent and historical reachability check" }, ...COMMON } }
+    inputSchema: schema({ full: { type: "boolean", description: "include every commit, intent and historical reachability check" }, ...COMMON })
   },
   {
     name: "ahp_start",
-    description: "Append handoff.start — take the baton. Records the verified base commit, tree state and gate result you observed.",
-    inputSchema: {
-      type: "object",
-      required: ["plan", "gate"],
-      properties: {
+    description: "Append handoff.start — take the baton. Records the verified base commit, tree state and gate result you observed. Explicitly selecting a done Lane reopens it only if the start succeeds.",
+    inputSchema: schema({
         plan: { type: "string", description: "what you intend to attempt this session" },
         gate: { type: "string", enum: ["pass", "fail", "not-run"], description: "result of running the project's own gate right now" },
         evidence: { type: "string", description: "short proof, e.g. '312 tests pass'" },
-        continues: { type: "number", description: "seq of the handoff.start you continue from (default: the last one)" },
-        worker_id: { type: "string" }, model: { type: "string" }, runtime: { type: "string" },
+        continues: { type: "integer", minimum: 1, description: "seq of the latest handoff.start being continued; omit to derive it automatically" },
+        worker_id: { type: "string", description: "explicit canonical worker id; normally supplied by the MCP host environment" },
+        model: { type: "string", description: "optional model metadata for this worker" },
+        runtime: { type: "string", description: "optional host/runtime metadata for this worker" },
         ...COMMON
-      }
-    }
+      }, ["plan", "gate"])
   },
   {
     name: "ahp_intent_open",
     description: "Append intent.open — declare a planned unit of work before you start it.",
-    inputSchema: {
-      type: "object",
-      required: ["id", "title", "intended"],
-      properties: {
+    inputSchema: schema({
         id: { type: "string", description: "short unique id, e.g. i-0828-a" },
-        title: { type: "string" },
+        title: { type: "string", description: "concise human-readable name for this unit of work" },
         intended: { type: "string", description: "what you plan to do and why" },
-        refs: { type: "array", items: { type: "string" } },
-        scope: { type: "array", items: { type: "string" } },
+        refs: { type: "array", items: { type: "string" }, description: "related issue, ticket, document, or commit references" },
+        scope: { type: "array", items: { type: "string" }, description: "files, directories, or globs expected to change" },
         ...COMMON
-      }
-    }
+      }, ["id", "title", "intended"])
   },
   {
     name: "ahp_intent_promote",
     description: "Append intent.promote — record that an intent's commit landed, with the actual result, any landmines, and the next step.",
-    inputSchema: {
-      type: "object",
-      required: ["id", "gate", "actual"],
-      properties: {
-        id: { type: "string" },
+    inputSchema: schema({
+        id: { type: "string", description: "id of the previously opened intent" },
         commits: { type: "array", items: { type: "string" }, description: "commit(s) that realized this intent; required unless gate is 'fail'" },
-        gate: { type: "string", enum: ["pass", "fail", "not-run"] },
+        gate: { type: "string", enum: ["pass", "fail", "not-run"], description: "gate result after implementing this intent" },
         actual: { type: "string", description: "what was actually done, including deviations from the intent" },
         landmines: { type: "array", items: { type: "string" }, description: "hazards / shortcuts / deferred work; required if gate is 'fail'" },
-        next: { type: "string" },
+        next: { type: "string", description: "concrete follow-up for the next worker, if any" },
         ...COMMON
-      }
-    }
+      }, ["id", "gate", "actual"])
   },
   {
     name: "ahp_end",
-    description: "Append handoff.end (best-effort) — release the baton. Records the end commit/gate, a summary, carried-over open intents and findings.",
-    inputSchema: {
-      type: "object",
-      required: ["reason", "summary", "gate"],
-      properties: {
-        reason: { type: "string", enum: ["limit", "task-done", "blocked", "handoff-requested"] },
-        summary: { type: "string" },
-        gate: { type: "string", enum: ["pass", "fail", "not-run"] },
-        evidence: { type: "string" },
+    description: "Append handoff.end (best-effort) — release the session baton. This does not change Lane lifecycle status; after reason task-done, separately set the Lane to done once completion guards pass.",
+    inputSchema: schema({
+        reason: { type: "string", enum: ["limit", "task-done", "blocked", "handoff-requested"], description: "why this session is releasing the baton" },
+        summary: { type: "string", description: "concise account of the session outcome and remaining work" },
+        gate: { type: "string", enum: ["pass", "fail", "not-run"], description: "project gate result at the end boundary" },
+        evidence: { type: "string", description: "short proof supporting the gate result" },
         findings: { type: "array", items: { type: "string" }, description: "hazards for the next worker; required if gate is not 'pass'" },
         ...COMMON
-      }
-    }
+      }, ["reason", "summary", "gate"])
+  },
+  {
+    name: "ahp_project_list",
+    description: "List every registered Project so desktop agents can discover stable project ids, names, known checkout roots, and remotes without inheriting a Git cwd. READ-ONLY and runs from anywhere.",
+    inputSchema: schema({
+      as_json: { type: "boolean", description: "return a JSON array instead of tab-separated human-readable rows" }
+    })
   },
   {
     name: "ahp_lane_list",
     description: "List active and done Lanes for safe task routing. Pass all:true only when archived history is relevant.",
-    inputSchema: { type: "object", properties: { all: { type: "boolean" }, as_json: { type: "boolean" }, cwd: COMMON.cwd, project: COMMON.project } }
+    inputSchema: schema({
+      all: { type: "boolean", description: "include intentionally hidden archived Lanes; omit for normal active + done discovery" },
+      as_json: { type: "boolean", description: "return a JSON array rather than human-readable rows" },
+      cwd: COMMON.cwd, project: COMMON.project
+    })
   },
   {
     name: "ahp_lane_create",
     description: "Create a Lane when no existing Lane matches the task. The agent supplies its concise specification; a human may edit it later.",
-    inputSchema: {
-      type: "object", required: ["title", "description"],
-      properties: { id: { type: "string" }, title: { type: "string" }, description: { type: "string" }, scope: { type: "array", items: { type: "string" } }, aliases: { type: "array", items: { type: "string" } }, cwd: COMMON.cwd, project: COMMON.project }
-    }
+    inputSchema: schema({
+      id: { type: "string", description: "optional stable slug; derived from title when omitted" },
+      title: { type: "string", description: "concise human-readable Lane name" },
+      description: { type: "string", description: "specific purpose and boundary used by future agents for routing" },
+      scope: { type: "array", items: { type: "string" }, description: "files, areas, or concepts normally owned by this Lane" },
+      aliases: { type: "array", items: { type: "string" }, description: "additional unique names that should resolve to this Lane" },
+      cwd: COMMON.cwd, project: COMMON.project
+    }, ["title", "description"])
   },
   {
     name: "ahp_lane_edit",
-    description: "Edit a Lane title, description, scope, aliases, or lifecycle status.",
-    inputSchema: {
-      type: "object", required: ["lane"],
-      properties: { lane: { type: "string" }, title: { type: "string" }, description: { type: "string" }, status: { type: "string", enum: ["active", "done", "archived"] }, scope: { type: "array", items: { type: "string" } }, aliases: { type: "array", items: { type: "string" } }, cwd: COMMON.cwd, project: COMMON.project }
-    }
+    description: "Edit Lane metadata or lifecycle status. done/archived require a free baton, no open intents and strict verification. Invalid immutable history needs an operator-reviewed CLI disposition and cannot be bypassed through MCP.",
+    inputSchema: schema({
+      lane: { type: "string", description: "existing Lane id, title, or alias to edit" },
+      title: { type: "string", description: "replacement human-readable title" },
+      description: { type: "string", description: "replacement routing description" },
+      status: { type: "string", enum: ["active", "done", "archived"], description: "active accepts writes; done is complete but discoverable; archived is complete and hidden by default" },
+      scope: { type: "array", items: { type: "string" }, description: "complete replacement scope list" },
+      aliases: { type: "array", items: { type: "string" }, description: "complete replacement alias list" },
+      cwd: COMMON.cwd, project: COMMON.project
+    }, ["lane"])
   },
   {
     name: "ahp_read",
     description: "Read worklog records for the selected Lane (human-readable, or raw with as_json). `field` projects one field flat across matching records instead of whole records — e.g. field:\"landmines\" or field:\"next\"; field:\"hazards\" pulls landmines + findings together (what the next worker must know). With field set, `tail` counts values, not records.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        since: { type: "number" }, tail: { type: "number" }, type: { type: "string" },
-        worker: { type: "string" }, field: { type: "string" }, as_json: { type: "boolean" },
+    inputSchema: schema({
+        since: { type: "integer", minimum: 0, description: "return records whose seq is greater than this non-negative integer" },
+        tail: { type: "integer", minimum: 0, description: "return only the last N matching records or projected values; zero returns none" },
+        type: { type: "string", description: "return only this exact record type" },
+        worker: { type: "string", description: "return only records attributed to this canonical worker" },
+        field: { type: "string", description: "project one field flat; hazards combines landmines and findings" },
+        as_json: { type: "boolean", description: "emit newline-delimited JSON instead of human-readable output" },
         ...COMMON
-      }
-    }
+      })
   },
   {
     name: "ahp_verify",
     description: "Structural + lifecycle check of the selected Lane's worklog. Strict by default (a quality warning fails); pass lenient:true for an old or knowingly-messy log.",
-    inputSchema: { type: "object", properties: { lenient: { type: "boolean" }, ...COMMON } }
+    inputSchema: schema({ lenient: { type: "boolean", description: "report quality warnings without failing; structural and lifecycle errors remain fatal" }, ...COMMON })
   }
 ];
 
@@ -157,9 +171,12 @@ function assertToolArguments(name, args) {
   }
   for (const [key, value] of Object.entries(args)) {
     const rule = schema.properties?.[key];
-    if (!rule || value === undefined) continue;
+    if (!rule) throw invalidParams(`unknown tools/call argument "${key}" for ${name}`);
+    if (value === undefined) continue;
     if (rule.type === "string" && typeof value !== "string") throw invalidParams(`tools/call argument "${key}" must be a string`);
     if (rule.type === "number" && (!Number.isFinite(value))) throw invalidParams(`tools/call argument "${key}" must be a finite number`);
+    if (rule.type === "integer" && !Number.isSafeInteger(value)) throw invalidParams(`tools/call argument "${key}" must be a safe integer`);
+    if (rule.minimum !== undefined && value < rule.minimum) throw invalidParams(`tools/call argument "${key}" must be at least ${rule.minimum}`);
     if (rule.type === "boolean" && typeof value !== "boolean") throw invalidParams(`tools/call argument "${key}" must be boolean`);
     if (rule.type === "array" && (!Array.isArray(value) || value.some((item) => typeof item !== "string"))) {
       throw invalidParams(`tools/call argument "${key}" must be an array of strings`);
@@ -168,7 +185,8 @@ function assertToolArguments(name, args) {
   }
 }
 
-function projectContextError(args) {
+function projectContextError(name, args) {
+  if (name === "ahp_project_list") return null;
   // Project selection has precedence over cwd in the CLI too. A desktop host
   // may retain an irrelevant relative cwd while supplying the stable project
   // id, so do not reject the otherwise valid explicit selection.
@@ -199,6 +217,7 @@ function toArgv(name, a = {}) {
   switch (name) {
     case "ahp_status": return ["status", ...g];
     case "ahp_pickup": return ["pickup", ...(a.full ? ["--full"] : []), ...g];
+    case "ahp_project_list": return ["project", "list", ...(a.as_json ? ["--json"] : [])];
     case "ahp_lane_list": return ["lane", "list", ...(a.all ? ["--all"] : []), ...(a.as_json ? ["--json"] : []), ...g];
     case "ahp_lane_create": {
       const r = ["lane", "create", "--title", String(a.title), "--description", String(a.description), ...g];
@@ -267,7 +286,7 @@ let clientName = null;
 
 function callTool(name, args) {
   const argv = toArgv(name, args);
-  const contextError = projectContextError(args);
+  const contextError = projectContextError(name, args);
   if (contextError) return { text: contextError, isError: true };
   const env = { ...process.env };
   if (clientName) {

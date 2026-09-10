@@ -219,7 +219,7 @@ function appendUnderLock(worklogFile, record, { now, precondition, derive, lockF
         operation: "append and sync the worklog record",
         target: worklogFile,
         effect: writeStarted
-          ? "The append may have reached the file. Run `ahp status` or `ahp verify` before retrying to avoid a duplicate record."
+          ? "The append may have reached the file. Run `ahp status --lane <id>` or `ahp verify --lane <id>` for the same selected Lane before retrying to avoid a duplicate record."
           : "No record bytes were written."
       });
     } finally {

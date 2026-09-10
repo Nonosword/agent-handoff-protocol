@@ -1,5 +1,6 @@
 // Structural + lifecycle validation for an AHP worklog. No VCS access — the Git
-// cross-checks are pickup-sequence steps (SPEC §7.1), surfaced by `ahp pickup`.
+// cross-checks are pickup-sequence steps (SPEC §7.1), surfaced by
+// `ahp pickup --lane <id>`.
 
 import { canonicalWorkerId } from "./worker-detect.mjs";
 
@@ -91,7 +92,8 @@ export function parseJsonl(text) {
 //   errors   — the log is malformed or a lifecycle rule is broken. Always fatal.
 //   warnings — the log is well-formed but has a quality problem (bad timestamp,
 //              a `pass` gate with no evidence, a baton not self-verified).
-//              `ahp verify` fails on these by default; `--lenient` downgrades them.
+//              `ahp verify --lane <id>` fails on these by default; `--lenient`
+//              downgrades them.
 //   notes    — expected, valid situations worth pointing at (a hard cutoff, an
 //              open intent mid-work). Never fatal, in any mode.
 export function validateRecords(entries) {
@@ -167,12 +169,21 @@ export function validateRecords(entries) {
   const opened = new Map();
   const promoted = new Set();
   let activeHandoff = null;
+  let previousStartSeq = null;
   for (const { record, no } of entries) {
     switch (record.type) {
       case "handoff.start":
+        if (previousStartSeq === null) {
+          if (record.seq === 1 && record.continuesFrom !== null) {
+            err(`line ${no}: the first handoff.start must use continuesFrom null`);
+          }
+        } else if (record.continuesFrom !== previousStartSeq) {
+          err(`line ${no}: continuesFrom must reference the previous handoff.start seq ${previousStartSeq}`);
+        }
+        previousStartSeq = record.seq;
         if (activeHandoff) {
           const w = workerLabel(activeHandoff.worker);
-          note(`line ${no}: baton severed — the session that started at seq ${activeHandoff.seq} (${w}) wrote no handoff.end before this one. A hard cutoff; SPEC §7.1 recovers it. If you are picking up, run \`ahp pickup\` and reconcile against HEAD before writing.`);
+          note(`line ${no}: baton severed — the session that started at seq ${activeHandoff.seq} (${w}) wrote no handoff.end before this one. A hard cutoff; SPEC §7.1 recovers it. If you are picking up, run \`ahp pickup --lane <id>\` for the selected Lane and reconcile against HEAD before writing.`);
         }
         activeHandoff = record;
         break;

@@ -81,26 +81,29 @@ tools:
   application's dedicated MCP config file (never touching anything else in it);
   Qoder via its `mcp add` CLI; and Qoder CN via its separate
   `qoder-cn --add-mcp <JSON>` CLI — so agents call
-  `ahp_pickup`, `ahp_start`, … directly. Structured arguments — no shell
+  `ahp_project_list`, `ahp_pickup`, `ahp_start`, … directly. Structured arguments — no shell
   quoting of the free-text fields.
 
-An agent with both prefers the MCP tools and falls back to the CLI. `./install.sh
---mode cli|mcp` skips the prompt · `--dry-run` · `--no-color` · `--uninstall`.
+An agent with both prefers the MCP tools and falls back to the CLI.
+`./install.sh --mode cli|mcp` skips the prompt · `--dry-run` · `--no-color` ·
+`--uninstall`.
 
 Requires Node ≥ 20 and Git.
 
 ## Use it
 
-From inside any Git repo:
+From inside any Git repo, after resolving the matching Lane (the first `start`
+may omit `--lane` only when no active or done Lane exists):
 
 ```sh
-ahp status          # project, baton holder, open intents, tree/gate state
-ahp pickup          # compact pickup; add --full only when the detail is needed
-ahp start   --plan "add rate limiting" --gate pass --evidence "188 tests pass"
-ahp intent open   --id i-0828-a --title "token bucket" --intended "per-IP, 429 on exhaustion"
-ahp intent promote --id i-0828-a --commit 9f2e1df --gate pass \
+ahp lane list
+ahp status  --lane rate-limiting     # project, baton, intents, tree/gate state
+ahp pickup  --lane rate-limiting     # add --full only when detail is needed
+ahp start   --lane rate-limiting --plan "add rate limiting" --gate pass --evidence "188 tests pass"
+ahp intent open --lane rate-limiting --id i-0828-a --title "token bucket" --intended "per-IP, 429 on exhaustion"
+ahp intent promote --lane rate-limiting --id i-0828-a --commit 9f2e1df --gate pass \
   --actual "middleware + 6 tests" --landmine "in-process only" --next "shared-cache state"
-ahp end     --reason limit --summary "1 of 3 commits landed" --gate pass --evidence "194 pass"
+ahp end --lane rate-limiting --reason limit --summary "1 of 3 commits landed" --gate pass --evidence "194 pass"
 ```
 
 Read commands such as `status` and `pickup` never write merely to discover a
@@ -139,6 +142,14 @@ and a clean strict verification result. AHP never archives by age. Historical
 edit them. The synthetic `main / legacy` Lane has the same lifecycle controls;
 only its fixed title, description, scope, aliases, id, and historical worklog
 path remain immutable.
+`handoff.end --reason task-done` releases the session baton but does not change
+Lane status. When the whole Lane is complete, follow it with
+`ahp lane edit <id> --status done`. If immutable historical records fail strict
+verification, an operator may preserve and acknowledge the exact worklog with
+`--operator-disposition "<reason>"`; AHP stores its SHA-256 and the reviewed
+errors in Lane metadata.
+Agents must never invent that disposition, and AHP never silently ignores the
+underlying verification result.
 A commit may legitimately be promoted by intents in multiple Lanes: AHP records
 associations, not commit ownership, and performs no semantic commit deduplication.
 The agent still decides whether the work needs its own branch/worktree or can
@@ -154,6 +165,10 @@ If a required AHP action fails, it did not happen. Keep the project unchanged,
 follow the error's target/evidence/next-step diagnostics, obtain filesystem or
 sandbox access as needed, and retry until the CLI exits 0 (or the MCP result is
 not an error). Never silently substitute an in-repo worklog.
+An explicit `--project` on a write must identify a registered Project. Desktop
+agents discover those ids with MCP `ahp_project_list`; passing `--cwd` inside a
+checkout remains the automatic registration path. Unknown ids are rejected so
+they cannot create worklogs hidden from the Dashboard.
 
 From **anywhere** — every project at a glance:
 

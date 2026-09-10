@@ -66,11 +66,11 @@ export function currentSessionId({ batonHeld, lastStart }) {
 export function assertBatonOwner(records, actor) {
   const state = project(records);
   if (!state.batonHeld || !state.baton) {
-    throw new Error("no active Lane baton — run ahp pickup then ahp start before writing an intent or handoff.end");
+    throw new Error("no active Lane baton — run `ahp pickup --lane <id>`, reconcile, then `ahp start --lane <id> --plan \"<intent>\" --gate pass|fail|not-run` before writing an intent or handoff.end");
   }
   const caller = canonicalWorkerId(actor);
   if (caller !== state.baton.worker) {
-    throw new Error("Lane baton is held by " + state.baton.worker + " (session " + state.baton.sessionId + "); " + caller + " cannot append to it. Run ahp pickup and, after reconciling, ahp start to take a new baton, or choose the correct --lane.");
+    throw new Error("Lane baton is held by " + state.baton.worker + " (session " + state.baton.sessionId + "); " + caller + " cannot append to it. Run `ahp pickup --lane <id>` and, after reconciling, `ahp start --lane <id> --plan \"<intent>\" --gate pass|fail|not-run` to take a new baton, or choose the correct --lane.");
   }
   return state;
 }

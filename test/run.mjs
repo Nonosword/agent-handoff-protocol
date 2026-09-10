@@ -214,6 +214,7 @@ test("installer atomically merges and removes only its MCP JSON entry", () => {
   };
   const install = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "mcp", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
   assert.equal(install.status, 0, install.stdout + install.stderr);
+  assert.match(install.stdout, /MCP server self-test\s+initialize handshake OK · 12 tools/);
   const registered = JSON.parse(fs.readFileSync(config, "utf8"));
   assert.deepEqual(registered.hostSetting, original.hostSetting);
   assert.deepEqual(registered.mcpServers.unrelated, original.mcpServers.unrelated);
@@ -608,6 +609,17 @@ test("explicit --project works without cwd detection", () => {
   assert.match(r.out, /manual-xyz/);
 });
 
+test("writes reject unknown explicit Projects instead of creating Dashboard-orphaned state", () => {
+  const id = "manual-write-typo";
+  const r = ahp(["start", "--project", id, "--plan", "must not land", "--gate", "pass", "--evidence", "ok"], os.tmpdir());
+  assert.equal(r.code, 1);
+  assert.match(r.err, /unknown registered project.*--cwd.*project add/);
+  assert.equal(fs.existsSync(path.join(HOME, "projects", id)), false, "a rejected id must not create a hidden project directory");
+  const listed = JSON.parse(ahp(["project", "list", "--json"], A).out);
+  assert.ok(Array.isArray(listed));
+  assert.equal(listed.some((entry) => entry.id === id), false);
+});
+
 test("Project ids do not merge punctuation-colliding remotes and --cwd selects its checkout", () => {
   const one = mkrepo("remote-collision-one");
   const two = mkrepo("remote-collision-two");
@@ -723,6 +735,14 @@ test("validator enforces schema types, baton ownership, and every non-pass end",
   ]);
   assert.ok(invalidLifecycle.errors.some((error) => /must own the active baton/.test(error)));
   assert.ok(invalidLifecycle.errors.some((error) => /line 2: handoff.end with a non-pass gate/.test(error)));
+
+  const invalidContinuation = validateRecords([
+    { no: 1, record: { type: "handoff.start", seq: 1, at: "2026-09-08T00:00:00Z", worker: "codex", continuesFrom: 999, base: state, plan: "first" } },
+    { no: 2, record: { type: "handoff.end", seq: 2, at: "2026-09-08T00:01:00Z", worker: "codex", reason: "task-done", end: state, summary: "done" } },
+    { no: 3, record: { type: "handoff.start", seq: 3, at: "2026-09-08T00:02:00Z", worker: "codex", continuesFrom: 999, base: state, plan: "second" } }
+  ]);
+  assert.ok(invalidContinuation.errors.some((error) => /first handoff.start must use continuesFrom null/.test(error)));
+  assert.ok(invalidContinuation.errors.some((error) => /continuesFrom must reference the previous handoff.start seq 1/.test(error)));
 });
 
 test("write commands require a Lane while first start may create it", () => {
@@ -758,6 +778,7 @@ test("Lanes auto-create once, preserve shared commit links, and require a choice
   const selected = ahp(["pickup", "--lane", "alpha-work"], P);
   assert.equal(selected.code, 0, selected.err);
   assert.match(selected.out, /Lane alpha-work/);
+  assert.match(selected.out, /ahp start --lane alpha-work --plan/);
   assert.match(selected.out, /shared commit\s+✓ alpha-work\/shared-a, beta\/shared-b/);
   assert.match(selected.out, /beta-only commit\s+✓ beta\/shared-b/);
   assert.doesNotMatch(selected.out, /beta-only commit.*unmatched/);
@@ -864,6 +885,11 @@ test("Lane lifecycle keeps done discoverable, reopens it explicitly, and hides a
   assert.equal(writeDone.code, 1);
   assert.match(writeDone.err, /Lane "lifecycle-work" is done/);
 
+  const invalidReopen = ahp(["start", "--plan", "invalid reopen", "--continues", "999", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P);
+  assert.equal(invalidReopen.code, 1);
+  assert.match(invalidReopen.err, /--continues must reference the latest handoff.start seq/);
+  assert.equal(JSON.parse(ahp(["status", "--json", "--lane", "lifecycle-work"], P).out).lane.status, "done", "failed start must roll the Lane back to done");
+
   const reopened = ahp(["start", "--plan", "reopen deliberately", "--gate", "pass", "--evidence", "e", "--lane", "lifecycle-work"], P);
   assert.equal(reopened.code, 0, reopened.err);
   assert.match(reopened.out, /lane\.reopened lifecycle-work[\s\S]*handoff\.start/);
@@ -903,6 +929,14 @@ test("Lane lifecycle keeps done discoverable, reopens it explicitly, and hides a
   const invalidDone = ahp(["lane", "edit", "lifecycle-work", "--status", "done"], P);
   assert.equal(invalidDone.code, 1);
   assert.match(invalidDone.err, /does not pass strict verification/);
+  const disposed = ahp(["lane", "edit", "lifecycle-work", "--status", "done", "--operator-disposition", "Reviewed legacy record written by an older AHP version"], P);
+  assert.equal(disposed.code, 0, disposed.err);
+  const disposedLane = JSON.parse(ahp(["lane", "list", "--all", "--json"], P).out)[0];
+  assert.equal(disposedLane.status, "done");
+  assert.equal(disposedLane.verificationDisposition.reason, "Reviewed legacy record written by an older AHP version");
+  assert.match(disposedLane.verificationDisposition.worklogSha256, /^[a-f0-9]{64}$/);
+  assert.ok(disposedLane.verificationDisposition.errors.length > 0);
+  assert.equal(ahp(["lane", "edit", "lifecycle-work", "--status", "archived"], P).code, 0, "an unchanged, already-disposed log may move from done to archived");
 });
 
 test("the synthetic legacy main Lane shares lifecycle status without changing identity or routing", () => {
@@ -1101,8 +1135,15 @@ test("MCP server: initialize + tools/list + tools/call", () => {
   const list = lines.find((l) => l.id === 2);
   const call = lines.find((l) => l.id === 3);
   assert.equal(init.result.serverInfo.name, "agent-handoff-protocol");
-  assert.equal(list.result.tools.length, 11);
+  assert.equal(list.result.tools.length, 12);
+  assert.ok(list.result.tools.some((tool) => tool.name === "ahp_project_list"));
   assert.deepEqual(list.result.tools.filter((tool) => tool.name.startsWith("ahp_lane_")).map((tool) => tool.name), ["ahp_lane_list", "ahp_lane_create", "ahp_lane_edit"]);
+  for (const tool of list.result.tools) {
+    assert.equal(tool.inputSchema.additionalProperties, false, `${tool.name} must reject unknown arguments`);
+    for (const [field, definition] of Object.entries(tool.inputSchema.properties)) {
+      assert.ok(definition.description, `${tool.name}.${field} needs an agent-facing description`);
+    }
+  }
   assert.equal(call.result.isError, false);
   assert.match(call.result.content[0].text, /project\s+projA/);
 });
@@ -1113,7 +1154,8 @@ test("MCP desktop callers need explicit project context when the server cwd is n
     { jsonrpc: "2.0", id: 2, method: "tools/list" },
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ahp_status", arguments: {} } },
     { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "ahp_lane_list", arguments: { cwd: A } } },
-    { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "ahp_status", arguments: { cwd: "relative/path" } } }
+    { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "ahp_status", arguments: { cwd: "relative/path" } } },
+    { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "ahp_project_list", arguments: { as_json: true } } }
   ].map((message) => JSON.stringify(message)).join("\n") + "\n";
   const result = spawnSync(process.execPath, [MCP], { cwd: os.tmpdir(), input: messages, env: ENV, encoding: "utf8", shell: false });
   const byId = new Map(result.stdout.trim().split("\n").map((line) => JSON.parse(line)).map((message) => [message.id, message]));
@@ -1124,6 +1166,8 @@ test("MCP desktop callers need explicit project context when the server cwd is n
   assert.equal(byId.get(4).result.isError, false, byId.get(4).result.content[0].text);
   assert.equal(byId.get(5).result.isError, true);
   assert.match(byId.get(5).result.content[0].text, /must be an absolute path/);
+  assert.equal(byId.get(6).result.isError, false);
+  assert.ok(Array.isArray(JSON.parse(byId.get(6).result.content[0].text)));
 });
 
 test("MCP accepts the documented AHP_PROJECT context outside a checkout", () => {
@@ -1172,7 +1216,9 @@ test("MCP rejects malformed frames and never stringifies absent write arguments"
     "{not json}",
     JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ahp_start", arguments: { gate: "pass", cwd: P } } }),
     JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "ahp_start", arguments: { plan: "p", gate: 7, cwd: P } } }),
-    JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ahp_intent_open", arguments: "not-an-object" } })
+    JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ahp_intent_open", arguments: "not-an-object" } }),
+    JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "ahp_lane_list", arguments: { cwd: P, alll: true } } }),
+    JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "ahp_read", arguments: { cwd: P, tail: -1 } } })
   ].join("\n") + "\n";
   const result = spawnSync(process.execPath, [MCP], { cwd: P, env: ENV, input: messages, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
@@ -1183,6 +1229,10 @@ test("MCP rejects malformed frames and never stringifies absent write arguments"
   assert.equal(responses[2].error.code, -32602);
   assert.match(responses[2].error.message, /gate/);
   assert.equal(responses[3].error.code, -32602);
+  assert.equal(responses[4].error.code, -32602);
+  assert.match(responses[4].error.message, /unknown tools\/call argument "alll"/);
+  assert.equal(responses[5].error.code, -32602);
+  assert.match(responses[5].error.message, /tail.*at least 0/);
   const status = ahp(["status", "--json"], P);
   assert.equal(status.code, 0, status.err);
   assert.equal(JSON.parse(status.out).lastSeq, 0, "invalid MCP requests must not append literal undefined records");
@@ -1198,6 +1248,22 @@ test("dashboard runs from outside any repo and lists projects", () => {
   const parsed = JSON.parse(j.out);
   assert.equal(parsed.version, PKG.version);
   assert.ok(Array.isArray(parsed.projects));
+});
+
+test("Dashboard text and JSON modes both fail on strict verification warnings", () => {
+  const P = mkrepo("dashboard-warning-contract");
+  const isolatedHome = path.join(TMP, "dashboard-warning-store");
+  const env = { ...ENV, AHP_HOME: isolatedHome, AHP_WORKER_ID: "codex" };
+  const run = (args, cwd = P) => {
+    const result = spawnSync(process.execPath, [AHP, ...args], { cwd, env, encoding: "utf8" });
+    return { code: result.status ?? -1, out: (result.stdout ?? "").trim(), err: (result.stderr ?? "").trim() };
+  };
+  assert.equal(run(["start", "--plan", "warning", "--gate", "pass"]).code, 0, "missing evidence intentionally creates a strict warning");
+  const human = run(["dashboard"], os.tmpdir());
+  const json = run(["dashboard", "--json"], os.tmpdir());
+  assert.equal(human.code, 1);
+  assert.equal(json.code, 1);
+  assert.equal(JSON.parse(json.out).projects[0].lanes[0].verify.warnings.length, 1);
 });
 
 test("worker identity is auto-detected, not left unknown", () => {
@@ -1282,6 +1348,19 @@ test("read --field projects one field flat; --field hazards merges landmines+fin
   const call = JSON.parse(mcpOut.stdout.trim().split("\n")[1]);
   assert.equal(call.result.isError, false);
   assert.match(call.result.content[0].text, /watch out/);
+});
+
+test("read validates non-negative integer bounds and tail zero returns no rows", () => {
+  const P = mkrepo("read-numeric-contract");
+  assert.equal(ahp(["start", "--plan", "numeric reads", "--gate", "pass", "--evidence", "ok"], P).code, 0);
+  assert.equal(ahp(["end", "--reason", "task-done", "--summary", "done", "--gate", "pass", "--evidence", "ok"], P).code, 0);
+  assert.equal(ahp(["read", "--tail", "0", "--json"], P).out, "");
+  for (const args of [["read", "--tail", "nope"], ["read", "--tail=-1"], ["read", "--since", "1.5"]]) {
+    const result = ahp(args, P);
+    assert.equal(result.code, 1, args.join(" "));
+    assert.match(result.err, /safe integer of at least 0/);
+  }
+  assert.equal(ahp(["read", "--since", "0", "--json"], P).out.split("\n").length, 2);
 });
 
 test("read/log --worker filters to one agent; pickup flags a prior turn", () => {
@@ -1405,6 +1484,42 @@ test("the hand-written validator and the JSON schema agree on the contract", () 
   }
   assert.deepEqual([...GATES].sort(), schema.$defs.gate.enum.slice().sort());
   assert.deepEqual([...END_REASONS].sort(), branch("handoff.end").properties.reason.enum.slice().sort());
+});
+
+test("agent-facing instructions carry complete Lane and completion commands", () => {
+  const instructionFiles = [
+    "integrations/codex-AGENTS.md",
+    "integrations/generic-agent.md",
+    "skills/claude-code/agent-handoff-protocol/SKILL.md"
+  ];
+  for (const relative of instructionFiles) {
+    const source = fs.readFileSync(path.join(REPO, relative), "utf8");
+    assert.match(source, /ahp_project_list/, `${relative}: Desktop Project discovery`);
+    assert.match(source, /ahp pickup --lane <id>/, `${relative}: explicit pickup Lane`);
+    assert.match(source, /ahp start --lane <id>/, `${relative}: explicit start Lane`);
+    assert.match(source, /ahp intent open --lane <id>/, `${relative}: explicit intent Lane`);
+    assert.match(source, /ahp intent promote --lane <id>/, `${relative}: explicit promote Lane`);
+    assert.match(source, /ahp end --lane <id> --reason task-done/, `${relative}: complete session command`);
+    assert.match(source, /ahp lane edit <id> --status done/, `${relative}: complete Lane command`);
+    assert.match(source, /must never invent|never invent/, `${relative}: operator disposition boundary`);
+  }
+
+  const zh = fs.readFileSync(path.join(REPO, "README.zh-CN.md"), "utf8");
+  for (const marker of ["active", "done", "archived", "ahp_project_list", "--operator-disposition"]) {
+    assert.match(zh, new RegExp(marker), `README.zh-CN lifecycle marker ${marker}`);
+  }
+
+  const help = ahp(["--help"], REPO).out;
+  assert.match(help, /status \[--json\]/);
+  assert.match(help, /project list \[--json\]/);
+  assert.match(help, /--worker-id <id>/);
+  assert.match(help, /--operator-disposition TEXT/);
+  assert.match(help, /does not\s+change Lane lifecycle status/);
+
+  const runtimeSources = ["src/render.mjs", "src/lifecycle.mjs", "src/worklog.mjs", "src/validate.mjs"]
+    .map((relative) => fs.readFileSync(path.join(REPO, relative), "utf8")).join("\n");
+  assert.doesNotMatch(runtimeSources, /`ahp (?:pickup|start|status|verify)(?:`| --(?!lane))/,
+    "runtime guidance must preserve explicit Lane context");
 });
 
 test("bundled example worklogs still validate", () => {

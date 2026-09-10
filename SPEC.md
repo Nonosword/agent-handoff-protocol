@@ -184,8 +184,13 @@ Lane lifecycle has three user-facing states:
   transition to `active` or `done` restores it.
 
 A transition to `done` or `archived` MUST be refused while the Lane holds a
-baton, has an open intent, or fails strict worklog verification. Implementations
-MUST NOT archive Lanes merely because time elapsed. The former `blocked` Lane
+baton or has an open intent. A strict verification failure MUST also refuse the
+transition unless an operator explicitly records a disposition that preserves
+the immutable worklog, its content hash, the reviewed errors/warnings, a reason,
+and a timestamp in Lane metadata. Such a disposition does not make verification
+pass and becomes stale if the worklog bytes change. Agents MUST NOT infer or
+invent an operator disposition. Implementations MUST NOT archive Lanes merely
+because time elapsed. The former `blocked` Lane
 metadata value MAY be read for compatibility, but MUST NOT be offered as a new
 status or accept new records; session blockage belongs in `handoff.end.reason`
 and findings.
@@ -253,6 +258,10 @@ Written by a worker when it picks up the baton, after completing §7.1.
 
 Best-effort, written by a worker when it stops. A consumer MUST NOT depend on this
 record existing; §7.1 recovers the same state without it.
+
+This record releases the session baton only. A `reason: "task-done"` record does
+not implicitly change Lane lifecycle metadata; completing the whole Lane is the
+separate guarded transition in §4.5.
 
 | Field | Type | Rule |
 | --- | --- | --- |
@@ -349,7 +358,7 @@ A worker MUST resolve the Project and Lane per §4.5 before making any change.
 All following reads and writes apply to that selected Lane. Then:
 
 1. Read the worklog. Find the last `handoff.start` and its `base.commit`; note the
-   highest `seq`.  *(`ahp pickup` does steps 1–4.)*
+   highest `seq`.  *(`ahp pickup --lane <id>` does steps 1–4.)*
 2. List the VCS history from `base.commit` to HEAD.
 3. Reconcile: every commit since `base.commit` that belongs to this Lane's
    work SHOULD correspond to an `intent.promote`; every `intent.promote` SHOULD
@@ -363,16 +372,16 @@ All following reads and writes apply to that selected Lane. Then:
 5. **Verify the baton independently.** Confirm the working tree state and run the
    gate. Record what was observed, not what a prior record claimed.
 6. Append a `handoff.start` with the verified `base` and a `plan`.
-   *(`ahp start --plan … --gate …` — `base.commit`, tree state and `seq` are
+   *(`ahp start --lane <id> --plan … --gate …` — `base.commit`, tree state and `seq` are
    filled in from Git and the log.)*
 
 ### 7.2 Working
 
 7. Split the task into small, single-intent commits. Append `intent.open` before
-   each. *(`ahp intent open --id … --title … --intended …`)*
+   each. *(`ahp intent open --lane <id> --id … --title … --intended …`)*
 8. After each commit passes the gate, append `intent.promote` with `commits`,
    `actual`, `landmines`, `next`.
-   *(`ahp intent promote --id … --commit … --gate … --actual …`)*
+   *(`ahp intent promote --lane <id> --id … --commit … --gate … --actual …`)*
 9. Do not cross a commit boundary leaving a dirty tree that no open intent
    describes.
 
@@ -385,7 +394,10 @@ branch/worktree. Lane separation does not isolate the physical working tree.
 
 10. Move to the nearest gate-passing commit. Promote every completed intent.
     Append `handoff.end`. If cut off before this, §7.1 still recovers the state.
-    *(`ahp end --reason … --summary … --gate …`)*
+    *(`ahp end --lane <id> --reason … --summary … --gate …`)*
+11. If `reason` is `task-done` and the whole Lane is complete, transition that
+    Lane to `done` after the end append succeeds. Do not archive it automatically.
+    *(`ahp lane edit <id> --status done`)*
 
 ## 8. Recovery
 

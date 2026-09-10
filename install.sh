@@ -931,10 +931,18 @@ EOF
   }
 
   if [ "$DRY" != 1 ]; then
-    if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
-      | node "$REPO/bin/ahp-mcp" 2>/dev/null | grep -q '"serverInfo"'; then
-      ok "MCP server self-test" "initialize handshake OK · 11 tools"
-    else bad "MCP server self-test failed"; fi
+    local mcp_tool_count
+    mcp_tool_count="$(
+      printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+      | node "$REPO/bin/ahp-mcp" 2>/dev/null \
+      | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const r=s.trim().split(/\n/).map(JSON.parse),i=r.find(x=>x.id===1),t=r.find(x=>x.id===2);if(!i?.result?.serverInfo||!Array.isArray(t?.result?.tools))process.exit(1);process.stdout.write(String(t.result.tools.length))}catch{process.exit(1)}})'
+    )"
+    case "$mcp_tool_count" in
+      ''|0|*[!0-9]*) bad "MCP server self-test failed" ;;
+      *) ok "MCP server self-test" "initialize handshake OK · $mcp_tool_count tools" ;;
+    esac
   fi
 }
 
@@ -963,8 +971,9 @@ printf '  %s%s✓ installed%s  (mode: %s%s%s)\n' "$OKC" "$B" "$R" "$B" "$MODE" "
 
 printf '\n  %sTry it%s\n' "$B" "$R"
 printf '    %s%-14s%s %severy project at a glance — from anywhere  (-w = live)%s\n' "$B" "ahp dashboard" "$R" "$DIM" "$R"
-printf '    %s%-14s%s %swhere things stand — inside a git repo%s\n' "$B" "ahp status" "$R" "$DIM" "$R"
-printf '    %s%-14s%s %sbefore you start work — inside a git repo%s\n' "$B" "ahp pickup" "$R" "$DIM" "$R"
+printf '    %s%-14s%s %sdiscover active and done work — inside a git repo%s\n' "$B" "ahp lane list" "$R" "$DIM" "$R"
+printf '    %s%-14s%s %sinspect the selected Lane%s\n' "$B" "ahp status --lane <id>" "$R" "$DIM" "$R"
+printf '    %s%-14s%s %spick up that same Lane before editing%s\n' "$B" "ahp pickup --lane <id>" "$R" "$DIM" "$R"
 
 printf '\n  %sDocs%s\n' "$B" "$R"
 printf '    %s%-18s%s %s\n' "$DIM" "the protocol" "$R" "$REPO/SPEC.md"

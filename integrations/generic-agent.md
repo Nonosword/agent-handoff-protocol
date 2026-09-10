@@ -29,8 +29,10 @@ it with `--lane <id>` (or the MCP `lane` field) without asking. If none matches,
 create one with a concise title, description and scope. If several remain
 plausible, show the listed Lanes plus New Lane and ask the user. With no active
 or done Lane, `start` creates one from its plan; a sole active Lane or the sole
-active Lane held by you is automatically selected. Carry the same explicit Lane through `pickup`, `start`
-and later writes. Do not create a near-duplicate Lane. Only the selected Lane's current baton
+active Lane held by you is automatically selected. Carry the same explicit Lane
+through `pickup`, `start` and later writes. Do not create a near-duplicate Lane.
+Outside a checkout, discover registered Projects with MCP `ahp_project_list` or
+CLI `ahp project list`; never invent an id. Only the selected Lane's current baton
 holder may write an intent or `handoff.end`; a different worker must pickup and
 start a new session before completing inherited work.
 
@@ -41,21 +43,25 @@ an explicit `start --lane <id>`. Archived Lanes must be explicitly restored to
 read-only compatibility, not a status to set for new work.
 
 At the start of a session, before editing anything:
-  1. Run `ahp pickup` for the selected Lane. It shows the last handoff, a
+  1. Run `ahp pickup --lane <id>` for the selected Lane. It shows the last handoff, a
      compact commit view, and OPEN INTENTS. Use `--full` only when omitted
      details are needed.
   2. For each open intent, inspect the working tree and decide: finish it,
      `wip:`-commit + promote it, or stash it.
   3. Run the project's own gate (tests/lint/build). Then:
-     `ahp start --plan "<what you intend>" --gate pass|fail|not-run --evidence "<proof>"`
+     `ahp start --lane <id> --plan "<what you intend>" --gate pass|fail|not-run --evidence "<proof>"`
 
 While working — one intent per commit:
-  `ahp intent open --id <id> --title "<t>" --intended "<what & why>"`
+  `ahp intent open --lane <id> --id <intent-id> --title "<t>" --intended "<what & why>"`
   ...make the commit, run the gate...
-  `ahp intent promote --id <id> --commit <sha> --gate pass --actual "<did>" --landmine "<hazard>" --next "<next>"`
+  `ahp intent promote --lane <id> --id <intent-id> --commit <sha> --gate pass --actual "<did>" --landmine "<hazard>" --next "<next>"`
 
 Before stopping (you may be cut off without warning):
-  `ahp end --reason limit --summary "<recap>" --gate pass --evidence "<proof>" [--finding "<hazard>"]`
+  `ahp end --lane <id> --reason limit --summary "<recap>" --gate pass --evidence "<proof>" [--finding "<hazard>"]`
+When the whole Lane is complete, run `ahp end --lane <id> --reason task-done ...`,
+then `ahp lane edit <id> --status done`. Ending a session never changes
+Lane status. Never archive automatically, and never invent an operator
+disposition for invalid immutable history.
 
 Never cross a commit boundary with a dirty tree that no open intent describes.
 

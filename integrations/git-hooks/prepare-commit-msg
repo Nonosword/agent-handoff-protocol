@@ -17,8 +17,8 @@ DONE=$(ahp read --type intent.promote --json 2>/dev/null | wc -l | tr -d ' ')
   echo ""
   echo "# --- AHP reminder (comments are stripped) ---"
   echo "# worklog: ${OPEN:-?} intent.open / ${DONE:-?} intent.promote for this project"
-  echo "# - opened an intent for this commit?         ahp intent open --id <id> ..."
-  echo "# - after the gate passes:                    ahp intent promote --id <id> --commit <sha> ..."
+  echo "# - opened an intent for this commit?         ahp intent open --lane <lane-id> --id <id> ..."
+  echo "# - after the gate passes:                    ahp intent promote --lane <lane-id> --id <id> --commit <sha> ..."
 } >> "$MSG_FILE"
 
 exit 0

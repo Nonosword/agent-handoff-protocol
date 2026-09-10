@@ -7,6 +7,27 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.8.0 — 2026-09-10
+
+- Added MCP `ahp_project_list` so Desktop agents can discover registered
+  Projects without inheriting a checkout cwd. Explicit unknown Project ids are
+  now rejected on writes instead of creating hidden orphan worklogs.
+- Closed the MCP input contract: all schemas reject unknown fields, every
+  argument is described, and integer ranges are validated consistently by the
+  MCP server and CLI.
+- Hardened Lane completion and recovery. `continuesFrom` must identify the
+  immediately preceding start, a failed done-Lane reopen rolls back atomically,
+  and an operator can record a hash-bound disposition for immutable historical
+  verification failures without making verification appear successful.
+- Completed the agent-facing workflow contract across Codex, Claude Code,
+  generic prompts, runtime guidance and documentation: commands retain their
+  explicit Lane, and `handoff.end --reason task-done` is followed by the
+  separate `lane edit --status done` lifecycle transition.
+- Aligned Dashboard strict exit status between text and JSON, made Lane registry
+  writes durable, validated read bounds, refreshed the Chinese documentation,
+  corrected the bundled relay continuation example, and made installer MCP tool
+  count reporting derive from the live `tools/list` response.
+
 ## 0.7.1 — 2026-09-10
 
 - Extended the Lane lifecycle to the synthetic `main / legacy` Lane. Its

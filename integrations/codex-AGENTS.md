@@ -30,8 +30,12 @@ it with `--lane <id>` (or the MCP `lane` field) without asking. If none matches,
 create one with a concise title, description and scope. If several remain
 plausible, show the listed Lanes plus New Lane and ask the user. With no active
 or done Lane, `start` creates one from its plan; a sole active Lane or the sole
-active Lane held by you is automatically selected. Carry the same explicit Lane through `pickup`, `start`
-and later writes. Do not create a near-duplicate Lane.
+active Lane held by you is automatically selected. Carry the same explicit Lane
+through `pickup`, `start` and later writes. Do not create a near-duplicate Lane.
+Outside a checkout, first use the MCP `ahp_project_list` tool (or CLI `ahp
+project list`), then pass the registered `project`; Desktop agents must never
+invent a Project id. MCP calls use the same `project`/`cwd` and `lane` fields as
+the complete CLI examples below.
 
 Default Lane discovery includes `active` and `done`; use `lane list --all` only
 when archived history matters. Prefer active Lanes. A done Lane stays visible to
@@ -47,20 +51,26 @@ That new holder may complete inherited open intents; `start` remains the normal
 hard-cutoff recovery path.
 
 BEFORE the first change this session:
-  ahp pickup
+  ahp pickup --lane <id>
 Read it: last handoff, commits since its base, and open intents (declared work
 with no promotion → probably uncommitted). For each open intent, check the tree
 and finish / wip-commit / stash it. Run the project's gate yourself. Then:
-  ahp start --plan "<intent>" --gate pass|fail|not-run --evidence "<proof>"
+  ahp start --lane <id> --plan "<intent>" --gate pass|fail|not-run --evidence "<proof>"
 
 WHILE WORKING, one intent per commit:
-  ahp intent open   --id i-<date>-<x> --title "<t>" --intended "<what & why>"
-  ahp intent promote --id i-<date>-<x> --commit <sha> --gate pass \
+  ahp intent open --lane <id> --id i-<date>-<x> --title "<t>" --intended "<what & why>"
+  ahp intent promote --lane <id> --id i-<date>-<x> --commit <sha> --gate pass \
      --actual "<what you did>" --landmine "<hazard>" --next "<follow-up>"
 
 WHEN STOPPING (best-effort — you may be cut off):
-  ahp end --reason limit --summary "<recap>" --gate pass --evidence "<proof>" \
+  ahp end --lane <id> --reason limit --summary "<recap>" --gate pass --evidence "<proof>" \
      [--finding "<hazard for the next agent>"]
+When the whole Lane is complete, not merely this session:
+  ahp end --lane <id> --reason task-done --summary "<recap>" --gate pass --evidence "<proof>"
+  ahp lane edit <id> --status done
+`handoff.end` releases the session baton; it never changes Lane status. Do not
+archive automatically. Invalid immutable history requires an operator-reviewed
+CLI `--operator-disposition`; an agent must never invent or apply one.
 
 Never cross a commit boundary with a dirty tree that no open intent describes.
 
@@ -69,7 +79,9 @@ The worklog is session continuity, not project memory. A `landmine` / `next` /
 invariant, a "never do X here") goes in the project's own docs — prefer editing
 an existing one — not the worklog.
 
-`ahp dashboard` (every Project/Lane at once — baton, open intents, verify,
-branch + short HEAD; runs outside a repo; `-w` redraws on change; CLI only) /
-`ahp status` / `ahp log` / `ahp verify` / `ahp --help` for the rest.
+`ahp dashboard` / MCP `ahp_project_list` (Project discovery), `ahp lane list`,
+`ahp status`, `ahp pickup`, `ahp read`, `ahp log`, `ahp verify`, and `ahp path`
+cover the read path. `ahp dashboard` shows every Project/Lane at once — baton, open intents, verify,
+branch + short HEAD; it runs outside a repo, `-w` redraws on change, and it is CLI-only.
+`ahp --help` documents the complete CLI.
 ```

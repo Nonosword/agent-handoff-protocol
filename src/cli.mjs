@@ -31,7 +31,7 @@ READ
                          anywhere. -w redraws immediately when the local AHP store
                          changes; it does not poll or fetch.
                          --json for scripts.
-  status                 selected Lane, baton holder, open intents, tree/gate state
+  status [--json]        selected Lane, baton holder, open intents, tree/gate state
   pickup [--full]        compact handoff, commit and open-intent summary; --full expands all
   read [--since N] [--tail K] [--type T] [--worker ID] [--field F] [--json]
                          --field projects one field (e.g. landmines, next) flat
@@ -44,7 +44,7 @@ READ
 WRITE  (append-only; seq and timestamp are assigned for you)
   start  --plan TEXT --gate pass|fail|not-run [--evidence TEXT] [--continues N]
   intent open   --id ID --title TEXT --intended TEXT [--ref R]... [--scope S]...
-  intent promote --id ID --commit SHA... --gate pass|fail|not-run --actual TEXT
+  intent promote --id ID [--commit SHA]... --gate pass|fail|not-run --actual TEXT
                  [--landmine TEXT]... [--next TEXT]
   end  --reason limit|task-done|blocked|handoff-requested --summary TEXT
        --gate pass|fail|not-run [--evidence ...] [--finding TEXT]...
@@ -52,26 +52,30 @@ WRITE  (append-only; seq and timestamp are assigned for you)
 LANES
   lane list [--all] [--json]
   lane create --title TEXT --description TEXT [--id ID] [--scope S]... [--alias A]...
-  lane edit <id> [--title TEXT] [--description TEXT] [--scope S]... [--alias A]...\n                 [--status active|done|archived]
+  lane edit <id> [--title TEXT] [--description TEXT] [--scope S]... [--alias A]...\n                 [--status active|done|archived] [--operator-disposition TEXT]
 
 PROJECTS
-  project list
+  project list [--json]
   project current
   project add [--name NAME] [--path DIR]
   project rename <id|name> <new-name>
   project forget <id|name>
 
 MAINTENANCE
-  compact [--keep N]     archive old sessions, keep the last N (default 3)
+  compact [--keep N]     move old worklog sessions to archive files; does not
+                         change Lane lifecycle status (default: keep 3)
   upgrade [--check]      git pull this checkout, then re-run the installer so
                          every host picks up the new skill / MCP registration.
                          --check only reports whether an update is available.
 
 GLOBAL
   --project <id|name>    override project detection (also AHP_PROJECT)
-  --lane <id|name>       select an existing Lane (also AHP_LANE)
+  --lane <id|title|alias> select an existing Lane (also AHP_LANE)
   --cwd <dir>            resolve the project from this directory
-  --version | -h/--help
+  --worker-id <id>       explicit worker identity (also AHP_WORKER_ID)
+  --model <name>         worker model metadata (also AHP_MODEL)
+  --runtime <name>       worker runtime metadata (also AHP_RUNTIME)
+  --version | -v | version | -h/--help
 
 WORKER IDENTITY  is taken from --worker-id/--model/--runtime, else the
   AHP_WORKER_ID / AHP_MODEL / AHP_RUNTIME env vars, else the last handoff.start.
@@ -417,19 +421,35 @@ function projectField(records, field) {
   return out;
 }
 
+function nonNegativeIntegerOption(name, value) {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`--${name} must be a safe integer of at least 0`);
+  return parsed;
+}
+
+function positiveIntegerOption(name, value) {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`--${name} must be a safe integer of at least 1`);
+  return parsed;
+}
+
 function cmdRead(rest, home) {
   const { values } = parse(rest, {
     since: { type: "string" }, tail: { type: "string" }, type: { type: "string" },
     worker: { type: "string" }, field: { type: "string" }, json: { type: "boolean" }
   });
+  const since = nonNegativeIntegerOption("since", values.since);
+  const tail = nonNegativeIntegerOption("tail", values.tail);
   const proj = resolveTarget(values);
   let records = readEntries(proj.worklog).map((e) => e.record);
-  if (values.since) records = records.filter((r) => r.seq > Number(values.since));
+  if (since !== undefined) records = records.filter((r) => r.seq > since);
   if (values.type) records = records.filter((r) => r.type === values.type);
   if (values.worker) records = filterByWorker(records, values.worker);
   if (values.field) {
     let items = projectField(records, values.field);
-    if (values.tail) items = items.slice(-Number(values.tail));
+    if (tail !== undefined) items = tail === 0 ? [] : items.slice(-tail);
     if (values.json) {
       for (const it of items) process.stdout.write(`${JSON.stringify(it)}\n`);
     } else if (items.length === 0) {
@@ -439,7 +459,7 @@ function cmdRead(rest, home) {
     }
     return 0;
   }
-  if (values.tail) records = records.slice(-Number(values.tail));
+  if (tail !== undefined) records = tail === 0 ? [] : records.slice(-tail);
   if (values.json) {
     for (const r of records) process.stdout.write(`${JSON.stringify(r)}\n`);
   } else {
@@ -500,35 +520,59 @@ function cmdStart(rest, home) {
   });
   if (!values.plan) throw new Error("start requires --plan");
   assertGate(values.gate, false);
+  const continuesFrom = positiveIntegerOption("continues", values.continues);
   const proj = resolveTarget(values, { registerMissing: true, autoPlan: values.plan });
+  let reopenedFromDone = false;
   if (proj.lane?.status === "done") {
     const reopened = lanes.edit(proj.laneProject, proj.lane.id, { status: "active" });
     proj.lane = reopened;
     proj.worklog = reopened.worklog;
     proj.lock = reopened.lock;
-    process.stdout.write(`lane.reopened ${reopened.id} — ${reopened.title}\n`);
+    reopenedFromDone = true;
   }
   const root = requireProjectGit(proj);
   const g = gitView(root);
   const analysis = analyze(readEntries(proj.worklog));
-  const continuesFrom = values.continues !== undefined ? Number(values.continues) : undefined;
   if (analysis.batonHeld) {
     const w = analysis.batonWorker;
     process.stderr.write(`note: previous worker ${typeof w === "string" ? w : w?.id} wrote no handoff.end — assuming a cutoff and continuing\n`);
   }
-  const rec = appendRecord(proj.worklog, proj.lock, {
-    type: "handoff.start",
-    worker: worker(values),
-    ...(continuesFrom === undefined ? {} : { continuesFrom }),
-    base: stateFrom(g, values.gate, values.evidence),
-    plan: values.plan
-  }, { derive: (full, entries) => {
-    const current = projectState(entries.map((entry) => entry.record));
-    return {
-      sessionId: makeSessionId(full.worker, full.at, full.seq),
-      ...(full.continuesFrom === undefined ? { continuesFrom: current.lastStart?.seq ?? null } : {})
-    };
-  }, precondition: () => assertLaneWritable(proj) });
+  let rec;
+  try {
+    rec = appendRecord(proj.worklog, proj.lock, {
+      type: "handoff.start",
+      worker: worker(values),
+      ...(continuesFrom === undefined ? {} : { continuesFrom }),
+      base: stateFrom(g, values.gate, values.evidence),
+      plan: values.plan
+    }, { derive: (full, entries) => {
+      const current = projectState(entries.map((entry) => entry.record));
+      const expected = current.lastStart?.seq ?? null;
+      if (full.continuesFrom !== undefined && full.continuesFrom !== expected) {
+        throw new Error(`--continues must reference the latest handoff.start seq ${expected ?? "(none)"}`);
+      }
+      return {
+        sessionId: makeSessionId(full.worker, full.at, full.seq),
+        ...(full.continuesFrom === undefined ? { continuesFrom: expected } : {})
+      };
+    }, precondition: () => assertLaneWritable(proj) });
+  } catch (error) {
+    if (reopenedFromDone) {
+      try {
+        const state = analyze(readEntries(proj.worklog));
+        if (!state.batonHeld) {
+          lanes.edit(proj.laneProject, proj.lane.id, {
+            status: "done",
+            expectedUpdated: proj.lane.updated
+          });
+        }
+      } catch (rollbackError) {
+        error.message += `\nreopen rollback failed: ${rollbackError.message}`;
+      }
+    }
+    throw error;
+  }
+  if (reopenedFromDone) process.stdout.write(`lane.reopened ${proj.lane.id} — ${proj.lane.title}\n`);
   process.stdout.write(`handoff.start seq ${rec.seq} — baton taken by ${labelWorker(rec.worker)} at ${rec.base.commit.slice(0, 12)} (gate ${rec.base.gate}) · session ${rec.sessionId}\n`);
   if (rec.base.gate === "not-run") process.stdout.write("reminder: gate=not-run — run the project's gate and record the result in your first intent.promote\n");
   return 0;
@@ -642,9 +686,13 @@ function cmdEnd(rest, home) {
 
 function cmdProject(rest, home) {
   const sub = rest[0];
-  const { values, positionals } = parse(rest.slice(1), { name: { type: "string" }, path: { type: "string" } }, { allowPositionals: true });
+  const { values, positionals } = parse(rest.slice(1), { name: { type: "string" }, path: { type: "string" }, json: { type: "boolean" } }, { allowPositionals: true });
   if (sub === "list") {
     const items = project.list(home);
+    if (values.json) {
+      process.stdout.write(`${JSON.stringify(items)}\n`);
+      return 0;
+    }
     if (!items.length) { process.stdout.write("(no projects registered)\n"); return 0; }
     for (const p of items) {
       process.stdout.write(`${p.name}\t[${p.id}]\t${p.remote ?? p.roots[0] ?? ""}\n`);
@@ -686,7 +734,8 @@ function cmdLane(rest, home) {
   const { values, positionals } = parse(rest.slice(1), {
     id: { type: "string" }, title: { type: "string" }, description: { type: "string" },
     status: { type: "string" }, scope: { type: "string", multiple: true },
-    alias: { type: "string", multiple: true }, json: { type: "boolean" }, all: { type: "boolean" }
+    alias: { type: "string", multiple: true }, json: { type: "boolean" }, all: { type: "boolean" },
+    "operator-disposition": { type: "string" }
   }, { allowPositionals: true });
   const proj = resolveProject(values, { registerMissing: sub === "create" });
   if (sub === "list") {
@@ -709,6 +758,9 @@ function cmdLane(rest, home) {
       if (lane.description) process.stdout.write("  " + lane.description + "\n");
       if (lane.scope.length) process.stdout.write("  scope: " + lane.scope.join(", ") + "\n");
       if (lane.aliases.length) process.stdout.write("  aliases: " + lane.aliases.join(", ") + "\n");
+      if (lane.verificationDisposition) {
+        process.stdout.write("  operator disposition: " + lane.verificationDisposition.reason + "\n");
+      }
     }
     return 0;
   }
@@ -720,7 +772,10 @@ function cmdLane(rest, home) {
   if (sub === "edit") {
     const wanted = positionals[0];
     if (!wanted) throw new Error("usage: ahp lane edit <id> [--title ... --description ... --status ...]");
-    const lane = lanes.edit(proj, wanted, { title: values.title, description: values.description, status: values.status, scope: values.scope, aliases: values.alias });
+    const lane = lanes.edit(proj, wanted, {
+      title: values.title, description: values.description, status: values.status,
+      scope: values.scope, aliases: values.alias, operatorDisposition: values["operator-disposition"]
+    });
     process.stdout.write("lane.updated " + lane.id + " — " + lane.title + " [" + lane.status + "]\n");
     return 0;
   }

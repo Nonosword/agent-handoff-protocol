@@ -48,6 +48,9 @@ existing choices plus a new Lane; ask
 the operator only when the descriptions do not resolve the ambiguity. Carry an
 explicit selection through `pickup`, `start` and later writes; once it is the
 sole Lane held by that worker, auto-selection can take over.
+Outside a checkout, MCP agents call `ahp_project_list` before selecting a
+registered `project`; they never invent an id. Every project-scoped MCP call
+carries that same `project` (or absolute `cwd`) and `lane`.
 
 `ahp lane create` and `ahp lane edit` keep those descriptions useful. A shared
 commit may appear in multiple Lanes; it is an association, not a duplicate. AHP
@@ -59,6 +62,11 @@ Use `active` for current work, `done` for completed but discoverable work, and
 explicit `start --lane <done-id>` reopens a done Lane; archived Lanes must first
 be unarchived with `lane edit`. Completion requires a free baton, no open
 intents, and strict verification. There is no age-based auto-archive.
+`handoff.end --reason task-done` releases the session baton only; follow it with
+`lane edit <id> --status done` when the whole Lane is complete. An operator may
+acknowledge immutable invalid history with `--operator-disposition "<reason>"`;
+the registry stores the exact worklog hash and reviewed issues. Agents never
+invent that override.
 The synthetic `main / legacy` Lane supports the same status changes, but keeps
 its fixed identity and historical project-wide worklog path.
 
