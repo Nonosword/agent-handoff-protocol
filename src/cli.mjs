@@ -21,7 +21,8 @@ const HELP = `ahp — Agent Handoff Protocol (v${PKG.version})
 
   Continuity for rotated coding agents. The worklog lives in a central store
   (${storeHome()}), one append-only worklog per Lane, grouped by Git project.
-  Your project repository is never touched.
+  No tracked project file, working-tree state, or Git history is touched.
+  Remote-less Projects receive a private Git-local identity on first successful write.
 
 USAGE
   ahp <command> [options]
@@ -205,8 +206,9 @@ function requireProjectGit(proj) {
     // explicit project not tied to a checkout here: git-less operation
     return null;
   }
-  const root = proj.roots?.[0] ?? git.topLevel(process.cwd());
-  return root && git.isGitRepo(root) ? root : (git.isGitRepo(process.cwd()) ? git.topLevel(process.cwd()) : null);
+  const knownRoots = [...new Set([proj.lastSeenRoot, ...(proj.roots ?? [])].filter(Boolean))];
+  const root = knownRoots.find((candidate) => git.isGitRepo(candidate));
+  return root ?? (git.isGitRepo(process.cwd()) ? git.topLevel(process.cwd()) : null);
 }
 
 function laneTarget(proj, lane) {
@@ -693,10 +695,10 @@ function cmdProject(rest, home) {
       process.stdout.write(`${JSON.stringify(items)}\n`);
       return 0;
     }
-    if (!items.length) { process.stdout.write("(no projects registered)\n"); return 0; }
-    for (const p of items) {
-      process.stdout.write(`${p.name}\t[${p.id}]\t${p.remote ?? p.roots[0] ?? ""}\n`);
-    }
+      if (!items.length) { process.stdout.write("(no projects registered)\n"); return 0; }
+      for (const p of items) {
+        process.stdout.write(`${p.name}\t[${p.id}]\t${p.remote ?? p.lastSeenRoot ?? p.roots[0] ?? ""}\n`);
+      }
     return 0;
   }
   if (sub === "current") {

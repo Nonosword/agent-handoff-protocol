@@ -29,13 +29,10 @@ function shortHash(s) {
 const LOCAL_ID_KEY = "ahp.project-id";
 const LOCAL_ID_RE = /^local-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function localId(cwd, { create = false } = {}) {
+function localId(cwd) {
   const existing = git.localConfig(cwd, LOCAL_ID_KEY);
   if (existing && LOCAL_ID_RE.test(existing)) return existing;
-  if (!create) return null;
-  const minted = `local-${crypto.randomUUID()}`;
-  git.setLocalConfig(cwd, LOCAL_ID_KEY, minted);
-  return minted;
+  return null;
 }
 
 export function loadRegistry(home) {
@@ -102,12 +99,12 @@ function mutateRegistry(home, operation) {
 }
 
 // Compute the id + descriptor for whatever project contains `cwd`.
-export function identify(cwd, { createLocalId = false } = {}) {
+export function identify(cwd) {
   if (!git.isGitRepo(cwd)) return null;
   const top = git.topLevel(cwd);
   const remote = git.remoteUrl(cwd);
   const normRemote = git.normalizeRemote(remote);
-  const local = normRemote ? null : localId(cwd, { create: createLocalId });
+  const local = normRemote ? null : localId(cwd);
   const id = normRemote ? slug(normRemote) : local ?? `${slug(path.basename(top))}-${shortHash(top)}`;
   return { id, root: top, remote: remote ?? null, normRemote: normRemote ?? null, localId: local, name: path.basename(top) };
 }
@@ -217,6 +214,7 @@ function descriptor(id, entry, home, meta) {
     name: entry.name ?? id,
     remote: entry.remote ?? null,
     roots: entry.roots ?? [],
+    lastSeenRoot: entry.lastSeenRoot ?? null,
     dir: projectDir(id, home),
     worklog: worklogPath(id, home),
     lock: lockPath(id, home),
@@ -228,37 +226,57 @@ function descriptor(id, entry, home, meta) {
 
 // Add (or update) the project containing cwd to the registry.
 export function register({ cwd = process.cwd(), home, name = null, autoreg = false }) {
-  const ident = identify(cwd, { createLocalId: true });
+  let ident = identify(cwd);
   if (!ident) throw new Error("not inside a Git repository");
-  return mutateRegistry(home, (registry) => {
-    // A pre-0.8.3 remote-less entry has no localId yet. Its currently known
-    // root is the only safe bridge for minting that identity in place rather
-    // than splitting its existing worklog into a new Project.
-    const matched = Object.entries(registry.projects).find(([, entry]) =>
-      sameIdentity(entry, ident) || (!ident.normRemote && (entry.roots ?? []).includes(ident.root))
-    );
-    const id = matched?.[0] ?? availableId(registry, ident);
-    const existing = matched?.[1] ?? registry.projects[id] ?? { roots: [] };
-    const entryName = name ?? existing.name ?? ident.name;
-    assertNameAvailable(registry, entryName, id);
-    const entry = {
-      name: entryName,
-      remote: ident.remote ?? existing.remote ?? null,
-      roots: [...new Set([...(existing.roots ?? []), ident.root])],
-      created: existing.created ?? new Date().toISOString(),
-      ...(ident.localId ? { localId: ident.localId } : existing.localId ? { localId: existing.localId } : {}),
-      lastSeenRoot: ident.root,
-      lastSeenAt: new Date().toISOString()
-    };
-    registry.projects[id] = entry;
-    return { ...descriptor(id, entry, home, { source: autoreg ? "autoregistered" : "registered", operationRoot: ident.root }), autoreg };
-  });
+  let mintedLocalId = null;
+  if (!ident.normRemote && !ident.localId) {
+    if (git.localConfig(cwd, LOCAL_ID_KEY)) {
+      throw new Error(`invalid Git local config ${LOCAL_ID_KEY}; remove it before AHP can write to this remote-less repository`);
+    }
+    mintedLocalId = `local-${crypto.randomUUID()}`;
+    git.setLocalConfig(cwd, LOCAL_ID_KEY, mintedLocalId);
+    ident = identify(cwd);
+  }
+  try {
+    return mutateRegistry(home, (registry) => {
+      // A pre-0.8.3 remote-less entry has no localId yet. Its currently known
+      // root is the only safe bridge for minting that identity in place rather
+      // than splitting its existing worklog into a new Project.
+      const matched = Object.entries(registry.projects).find(([, entry]) =>
+        sameIdentity(entry, ident) || (!ident.normRemote && (entry.roots ?? []).includes(ident.root))
+      );
+      const id = matched?.[0] ?? availableId(registry, ident);
+      const existing = matched?.[1] ?? registry.projects[id] ?? { roots: [] };
+      const entryName = name ?? existing.name ?? ident.name;
+      assertNameAvailable(registry, entryName, id);
+      const entry = {
+        name: entryName,
+        remote: ident.remote ?? existing.remote ?? null,
+        roots: [...new Set([...(existing.roots ?? []), ident.root])],
+        created: existing.created ?? new Date().toISOString(),
+        ...(ident.localId ? { localId: ident.localId } : existing.localId ? { localId: existing.localId } : {}),
+        lastSeenRoot: ident.root,
+        lastSeenAt: new Date().toISOString()
+      };
+      registry.projects[id] = entry;
+      return { ...descriptor(id, entry, home, { source: autoreg ? "autoregistered" : "registered", operationRoot: ident.root }), autoreg };
+    });
+  } catch (error) {
+    // The Git-local UUID is created solely to anchor this registration. If the
+    // central store rejects the registration, remove only the value minted by
+    // this call so a failed AHP write has no lingering Git-config side effect.
+    if (mintedLocalId && git.localConfig(cwd, LOCAL_ID_KEY) === mintedLocalId) {
+      try { git.unsetLocalConfig(cwd, LOCAL_ID_KEY); }
+      catch (rollbackError) { error.message += `\nlocal identity rollback failed: ${rollbackError.message}`; }
+    }
+    throw error;
+  }
 }
 
 export function list(home) {
   const registry = loadRegistry(home);
   return Object.entries(registry.projects).map(([id, e]) => ({
-    id, name: e.name ?? id, remote: e.remote ?? null, roots: e.roots ?? [], created: e.created ?? null
+    id, name: e.name ?? id, remote: e.remote ?? null, roots: e.roots ?? [], lastSeenRoot: e.lastSeenRoot ?? null, created: e.created ?? null
   }));
 }
 

@@ -49,9 +49,11 @@ function projectDescriptor(entry) {
 }
 
 function projectRoot(entry) {
-  return (entry.roots ?? []).find((root) => {
-    try { return fs.statSync(root).isDirectory(); } catch { return false; }
-  }) ?? null;
+  // A moved checkout is the last location that successfully wrote AHP state.
+  // Prefer it over an older root that still exists as a copied/stale checkout;
+  // then fall back through known roots, but only to a real Git repository.
+  const roots = [...new Set([entry.lastSeenRoot, ...(entry.roots ?? [])].filter(Boolean))];
+  return roots.find((root) => git.isGitRepo(root)) ?? null;
 }
 
 function gatherLane(lane) {
@@ -207,7 +209,7 @@ function fingerprint(home) {
     try { laneRows = lanes.list(descriptor, { includeArchived: false }); } catch { /* render reports details */ }
     const root = projectRoot(entry);
     const head = root ? git.headView(root) : { branch: null, short: null };
-    return [entry.id, entry.name, entry.roots, fileMeta(path.join(descriptor.dir, "lanes.json")).stamp, head.branch, head.short, ...laneRows.map((lane) => [lane.id, fileMeta(lane.worklog).stamp])];
+    return [entry.id, entry.name, entry.lastSeenRoot, entry.roots, fileMeta(path.join(descriptor.dir, "lanes.json")).stamp, head.branch, head.short, ...laneRows.map((lane) => [lane.id, fileMeta(lane.worklog).stamp])];
   }));
 }
 

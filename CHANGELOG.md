@@ -7,6 +7,19 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.8.4 — 2026-09-18
+
+- Failed lock-token initialization no longer leaves an empty or partial lock
+  that permanently blocks a Lane, Project registry, Lane registry, or installer
+  MCP JSON update. Only a lock created by the failing process is removed.
+- A remote-less Project now rolls back a newly minted Git-local identity if its
+  central registration fails, preserving the failure boundary for the caller.
+- Dashboard and explicit Project Git views now prefer the last checkout that
+  successfully wrote AHP state, rather than an older still-present copy.
+- Public documentation now accurately distinguishes protected tracked files,
+  working-tree/history state, and the private Git-local identity used only by
+  remote-less repositories.
+
 ## 0.8.3 — 2026-09-18
 
 - A write from a moved remote-backed checkout now records its new root and

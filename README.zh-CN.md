@@ -6,7 +6,7 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 > 一份只追加的 worklog，让轮换工作的编码 agent 在某一个用量耗尽、下一个接手时不丢上下文。
-> worklog 存在项目**之外**的一个 store 里——你的仓库不会被碰。
+> worklog 存在项目**之外**的一个 store 里——不会修改 tracked 文件、工作区或 Git 历史。
 
 ## 要解决的问题
 
@@ -44,7 +44,9 @@ handoff.start   ── 下一个 agent：核对上一个 base 以来的提交，
 **Project** 负责识别 Git 仓库；**Lane** 负责区分同一项目中的一条完整工作流。每个 Lane
 拥有独立的只追加 JSON-Lines worklog 和 baton，按整数 `seq` 排序，存在用户级 store
 `$XDG_DATA_HOME/agent-handoff/` 下。已有的项目级 worklog 会作为合成的 `main` Lane
-继续可读。项目仓库不会被写入，详见 [SPEC §4](./SPEC.md)。
+继续可读。不会向项目加入 tracked 文件；没有 `origin` 的仓库在第一次**成功**写入时，会在
+Git local config 保存私有的 `ahp.project-id`，让外部 worklog 能随目录移动而保持身份。
+这既不是工作区改动，也不是 Git 历史改动，详见 [SPEC §4](./SPEC.md)。
 
 ## 安装
 
@@ -88,6 +90,8 @@ ahp end --lane rate-limiting --reason limit --summary "3 个提交里落地了 1
 
 `status`、`pickup` 等读命令不会为了识别项目而写入；第一条写命令才会自动注册。
 `ahp` 从 Git 自动填 `seq`、时间戳、base 提交、工作区状态——你只提供含义。
+没有 `origin` 的仓库在第一次成功写入时会创建私有 Git-local 迁移身份；若注册不能完成，
+AHP 会在返回失败前回滚该身份。
 
 ### Project 与 Lane 怎么选
 

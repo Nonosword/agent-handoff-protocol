@@ -87,6 +87,11 @@ export function setLocalConfig(cwd, key, value) {
   if (!r.ok) throw new Error(`could not write Git local config ${key}: ${r.err || "git config failed"}`);
 }
 
+export function unsetLocalConfig(cwd, key) {
+  const r = git(cwd, ["config", "--local", "--unset-all", key]);
+  if (!r.ok) throw new Error(`could not remove Git local config ${key}: ${r.err || "git config failed"}`);
+}
+
 // Normalize a remote URL to a stable identity key:
 //   git@github.com:User/Repo.git  ->  github.com/user/repo
 //   https://github.com/User/Repo  ->  github.com/user/repo

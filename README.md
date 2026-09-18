@@ -7,7 +7,7 @@
 
 > An append-only worklog so rotated coding agents don't lose the thread when one
 > hits its usage limit and the next takes over. Kept in a store **outside** your
-> project — your repo is never touched.
+> project — it never changes tracked files, the working tree, or Git history.
 
 ## The problem
 
@@ -58,7 +58,10 @@ A **Project** identifies the Git repository; a **Lane** identifies one coherent
 work stream inside it. Each Lane has its own append-only JSON-Lines worklog and
 baton, ordered by integer `seq`, in the per-user store at
 `$XDG_DATA_HOME/agent-handoff/`. Existing project-wide logs remain available as
-the synthetic `main` Lane. Nothing is added to your repo. See [SPEC §4](./SPEC.md).
+the synthetic `main` Lane. No tracked file is added to your repo. For a
+remote-less repository, its first successful write also stores a private
+`ahp.project-id` in Git local config so the external worklog survives a directory
+move; this is neither a working-tree nor a Git-history change. See [SPEC §4](./SPEC.md).
 
 ## Install
 
@@ -110,6 +113,9 @@ ahp end --lane rate-limiting --reason limit --summary "1 of 3 commits landed" --
 Read commands such as `status` and `pickup` never write merely to discover a
 project. The first write command auto-registers it. `ahp` fills in `seq`, the
 timestamp, the base commit and tree state from Git — you supply the meaning.
+For a repository without `origin`, that first successful write also creates its
+private Git-local relocation identity; if registration cannot be completed, AHP
+rolls that identity back before reporting the failure.
 
 ### Project and Lane selection
 

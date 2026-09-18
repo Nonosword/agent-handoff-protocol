@@ -49,8 +49,10 @@ export function acquireLock(lockFile) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     let fd;
     let token;
+    let created = false;
     try {
       fd = fs.openSync(lockFile, "wx", 0o600);
+      created = true;
       token = `${process.pid}\n${new Date().toISOString()}\n${process.pid}-${Math.random().toString(36).slice(2)}\n`;
       writeAllSync(fd, token);
       fs.fsyncSync(fd);
@@ -59,7 +61,15 @@ export function acquireLock(lockFile) {
       if (e.code !== "EEXIST") {
         // A failed exclusive create says nothing about an existing owner's
         // validity. In particular, EACCES/EROFS must never unlink its lock.
-        if (token) releaseLock(lockFile, token);
+        // Conversely, once this process did create the file, a failed token
+        // write/fsync must not strand an empty or partial lock forever: those
+        // bytes deliberately fail stale-lock recovery because they cannot
+        // prove who owns them. Close before unlinking for Windows as well.
+        if (fd !== undefined) {
+          try { fs.closeSync(fd); } catch { /* best effort */ }
+          fd = undefined;
+        }
+        if (created) { try { fs.rmSync(lockFile, { force: true }); } catch { /* best effort */ } }
         throw e;
       }
       // Reclaim only a lock whose recorded PID is definitely dead. A live PID

@@ -313,13 +313,23 @@ function acquireLock() {
   const token = `${process.pid}\n${Date.now()}\n${Math.random().toString(36).slice(2)}\n`;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     let fd;
+    let created = false;
     try {
       fd = fs.openSync(lock, "wx", 0o600);
+      created = true;
       writeAll(fd, token);
       fs.fsyncSync(fd);
       return { lock, token };
     } catch (error) {
-      if (error.code !== "EEXIST") throw error;
+      if (error.code !== "EEXIST") {
+        // This process created the lock but failed before it could publish a
+        // complete durable token. Do not leave an empty/partial lock that the
+        // conservative stale-lock path must refuse to reclaim. Close first so
+        // Windows can remove it too; never remove a lock we did not create.
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* best effort */ } fd = undefined; }
+        if (created) { try { fs.rmSync(lock, { force: true }); } catch { /* best effort */ } }
+        throw error;
+      }
       try {
         const pidLine = fs.readFileSync(lock, "utf8").split("\n", 1)[0];
         const pid = /^\d+$/.test(pidLine) ? Number(pidLine) : NaN;

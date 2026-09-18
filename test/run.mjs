@@ -14,6 +14,7 @@ import * as projectRegistry from "../src/project.mjs";
 import { REQUIRED, RECORD_TYPES, GATES, END_REASONS, validateRecords } from "../src/validate.mjs";
 import { explainStoreFsError } from "../src/storage-errors.mjs";
 import { colors as dashboardColors, drawFrame } from "../src/dashboard.mjs";
+import { acquireLock, releaseLock } from "../src/worklog.mjs";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const AHP = path.join(REPO, "bin", "ahp");
@@ -31,8 +32,8 @@ function test(name, fn) {
   catch (e) { failed += 1; console.error(`FAIL  ${name}\n      ${e.message}`); }
 }
 
-function sh(cmd, args, cwd) {
-  const r = spawnSync(cmd, args, { cwd, env: ENV, encoding: "utf8", shell: false });
+function sh(cmd, args, cwd, env = ENV) {
+  const r = spawnSync(cmd, args, { cwd, env, encoding: "utf8", shell: false });
   return { code: r.status ?? -1, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim() };
 }
 const ahp = (args, cwd) => sh(process.execPath, [AHP, ...args], cwd);
@@ -128,6 +129,26 @@ test("store diagnostics classify from evidence without pretending certainty", ()
 
   const noSpace = Object.assign(new Error("full"), { code: "ENOSPC", syscall: "write", path: target });
   assert.match(explainStoreFsError(noSpace, { operation: "append", target }).message, /out of free space/);
+});
+
+test("a failed lock-token write removes only the unpublished lock it created", () => {
+  const lock = path.join(TMP, "failed-lock-token", ".lock");
+  const originalWrite = fs.writeSync;
+  fs.writeSync = () => {
+    const error = new Error("injected lock write failure");
+    error.code = "EIO";
+    throw error;
+  };
+  try {
+    assert.throws(() => acquireLock(lock), /injected lock write failure/);
+  } finally {
+    fs.writeSync = originalWrite;
+  }
+  assert.equal(fs.existsSync(lock), false, "a partial lock must not strand future writers");
+  const token = acquireLock(lock);
+  assert.equal(fs.existsSync(lock), true, "a later writer can acquire the same lock");
+  releaseLock(lock, token);
+  assert.equal(fs.existsSync(lock), false);
 });
 
 test("a malformed registry fails closed and is never treated as empty", () => {
@@ -769,6 +790,41 @@ test("a remote-less Project gets a Git-local identity that survives a move", () 
   assert.equal(entry.localId, localId);
 });
 
+test("a failed remote-less registration rolls back its newly minted Git-local identity", () => {
+  const root = mkrepo("project-local-registration-rollback");
+  const blockedHome = path.join(TMP, "project-local-registration-blocked-store");
+  fs.writeFileSync(blockedHome, "not a directory");
+
+  assert.throws(() => projectRegistry.register({ cwd: root, home: blockedHome }), /AHP_STORE_IO_FAILED|EEXIST/);
+  assert.equal(sh("git", ["config", "--local", "--get", "ahp.project-id"], root).code, 1, "a failed registration must not leave Git config changed");
+
+  fs.rmSync(blockedHome);
+  const registered = projectRegistry.register({ cwd: root, home: blockedHome });
+  assert.match(registered.id, /^local-[0-9a-f-]{36}$/i, "a clean retry mints and persists the relocation identity");
+});
+
+test("last-seen checkout wins over a still-present older copy", () => {
+  const root = mkrepo("project-last-seen-old");
+  const home = path.join(TMP, "project-last-seen-store");
+  sh("git", ["remote", "add", "origin", "https://github.com/example/project-last-seen.git"], root);
+  const registered = projectRegistry.register({ cwd: root, home });
+  const moved = path.join(TMP, "project-last-seen-new");
+  fs.cpSync(root, moved, { recursive: true });
+  const movedHead = commit(moved, "newer copied checkout");
+  projectRegistry.resolve({ cwd: moved, home, registerMissing: true });
+
+  const env = { ...ENV, AHP_HOME: home };
+  const status = sh(process.execPath, [AHP, "status", "--project", registered.id, "--json"], os.tmpdir(), env);
+  assert.equal(status.code, 0, status.err);
+  assert.equal(JSON.parse(status.out).git.head.slice(0, 7), movedHead);
+
+  const dashboard = sh(process.execPath, [AHP, "dashboard", "--json"], os.tmpdir(), env);
+  assert.equal(dashboard.code, 0, dashboard.err);
+  const shown = JSON.parse(dashboard.out).projects.find((item) => item.id === registered.id);
+  assert.equal(shown.root, projectRegistry.identify(moved).root);
+  assert.equal(shown.head, movedHead);
+});
+
 test("a legacy remote-less Project gains its local identity without splitting history", () => {
   const root = mkrepo("project-local-legacy");
   const home = path.join(TMP, "project-local-legacy-store");
@@ -789,9 +845,10 @@ test("project B worklog is isolated from A", () => {
   assert.doesNotMatch(ahp(["project", "list"], A).out, /projB/);
 });
 
-test("the project repo is never modified", () => {
+test("AHP leaves tracked project files and the working tree untouched", () => {
   assert.equal(sh("git", ["status", "--porcelain"], A).out, "");
   assert.ok(!fs.existsSync(path.join(A, ".coworker")));
+  assert.match(sh("git", ["config", "--local", "--get", "ahp.project-id"], A).out, /^local-[0-9a-f-]{36}$/i);
 });
 
 test("pickup shows commits since base and reconciles them", () => {
