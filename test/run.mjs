@@ -158,6 +158,98 @@ test("full cycle: start -> intent open -> promote -> end", () => {
   assert.equal(end.code, 0, end.err);
 });
 
+test("installer repairs broken AHP command links after checkout relocation", () => {
+  const root = path.join(TMP, "installer-relocated-checkout");
+  const home = path.join(root, "home");
+  const bin = path.join(root, "bin");
+  const oldCheckout = path.join(root, "old", "agent-handoff-protocol");
+  fs.mkdirSync(bin, { recursive: true });
+  for (const name of ["ahp", "ahp-mcp"]) {
+    fs.symlinkSync(path.join(oldCheckout, "bin", name), path.join(bin, name));
+  }
+  const env = {
+    ...ENV,
+    HOME: home,
+    PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    AHP_BIN_DIR: bin,
+    AHP_HOME: path.join(root, "store"),
+    CLAUDE_DESKTOP_MCP: path.join(root, "no-claude", "claude_desktop_config.json"),
+    CLAUDE_DESKTOP_APP: path.join(root, "no-claude.app"),
+    CHATGPT_APP: path.join(root, "no-chatgpt"),
+    QODER_APP: path.join(root, "no-qoder.app"),
+    QODER_CONFIG: path.join(home, ".qoder"),
+    QODER_CN_APP: path.join(root, "no-qoder-cn.app"),
+    QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+  };
+  const install = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "cli", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(install.status, 0, install.stdout + install.stderr);
+  assert.match(install.stdout, /linked ahp/);
+  assert.match(install.stdout, /ahp --version\s+/);
+  for (const name of ["ahp", "ahp-mcp"]) {
+    assert.equal(fs.readlinkSync(path.join(bin, name)), path.join(REPO, "bin", name));
+  }
+  const version = spawnSync(path.join(bin, "ahp"), ["--version"], { env, encoding: "utf8", shell: false });
+  assert.equal(version.status, 0, version.stderr);
+  assert.equal(version.stdout.trim(), PKG.version);
+});
+
+test("installer leaves a live non-AHP command symlink untouched", () => {
+  const root = path.join(TMP, "installer-live-foreign-link");
+  const home = path.join(root, "home");
+  const bin = path.join(root, "bin");
+  const foreign = path.join(root, "foreign", "bin", "ahp");
+  fs.mkdirSync(path.dirname(foreign), { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(foreign, "#!/usr/bin/env bash\\necho foreign\\n");
+  fs.chmodSync(foreign, 0o755);
+  fs.symlinkSync(foreign, path.join(bin, "ahp"));
+  const env = {
+    ...ENV,
+    HOME: home,
+    PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    AHP_BIN_DIR: bin,
+    AHP_HOME: path.join(root, "store"),
+    CLAUDE_DESKTOP_MCP: path.join(root, "no-claude", "claude_desktop_config.json"),
+    CLAUDE_DESKTOP_APP: path.join(root, "no-claude.app"),
+    CHATGPT_APP: path.join(root, "no-chatgpt"),
+    QODER_APP: path.join(root, "no-qoder.app"),
+    QODER_CONFIG: path.join(home, ".qoder"),
+    QODER_CN_APP: path.join(root, "no-qoder-cn.app"),
+    QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+  };
+  const install = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "cli", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(install.status, 0, install.stdout + install.stderr);
+  assert.match(install.stdout, /ahp left as-is[\s\S]*not an AHP checkout/);
+  assert.equal(fs.readlinkSync(path.join(bin, "ahp")), foreign);
+});
+
+test("installer leaves a broken non-AHP command symlink untouched", () => {
+  const root = path.join(TMP, "installer-broken-foreign-link");
+  const home = path.join(root, "home");
+  const bin = path.join(root, "bin");
+  const foreign = path.join(root, "old", "other-tool", "bin", "ahp");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.symlinkSync(foreign, path.join(bin, "ahp"));
+  const env = {
+    ...ENV,
+    HOME: home,
+    PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    AHP_BIN_DIR: bin,
+    AHP_HOME: path.join(root, "store"),
+    CLAUDE_DESKTOP_MCP: path.join(root, "no-claude", "claude_desktop_config.json"),
+    CLAUDE_DESKTOP_APP: path.join(root, "no-claude.app"),
+    CHATGPT_APP: path.join(root, "no-chatgpt"),
+    QODER_APP: path.join(root, "no-qoder.app"),
+    QODER_CONFIG: path.join(home, ".qoder"),
+    QODER_CN_APP: path.join(root, "no-qoder-cn.app"),
+    QODER_CN_CONFIG: path.join(home, ".qoder-cn")
+  };
+  const install = spawnSync("bash", [path.join(REPO, "install.sh"), "--mode", "cli", "--no-color"], { cwd: REPO, env, encoding: "utf8", shell: false });
+  assert.equal(install.status, 1, install.stdout + install.stderr);
+  assert.match(install.stdout, /broken link is not identifiable as AHP/);
+  assert.equal(fs.readlinkSync(path.join(bin, "ahp")), foreign);
+});
+
 test("installer detects Qoder CN separately and never routes it through qoder mcp", () => {
   const root = path.join(TMP, "installer-qoder-cn");
   const home = path.join(root, "home");

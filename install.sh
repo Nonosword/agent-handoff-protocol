@@ -655,20 +655,29 @@ command -v git >/dev/null 2>&1 && ok "Git" "$(git --version | awk '{print $3}')"
 [ "$FAILED" = 1 ] && { printf '\n  %sfix the above and re-run.%s\n\n' "$ERRC" "$R"; exit 1; }
 
 # Link $REPO/bin/<name> into $BIN_DIR, but never clobber a file that is not
-# ours: an absent path or a symlink into some agent-handoff-protocol checkout is
-# safe to (re)point; a real file, a directory, or a symlink to an unrelated
-# target is left alone with a message.
+# ours: an absent path, a symlink into an AHP checkout, or a broken AHP command
+# link left behind when a checkout moved is safe to (re)point. A real file, a
+# directory, or a live symlink to an unrelated target is left alone with a
+# message.
 LINKED_AHP=0
 link_bin() {
   name="$1"; src="$REPO/bin/$name"; dst="$BIN_DIR/$name"
   _did() { [ "$name" = ahp ] && LINKED_AHP=1; ok "linked $name" "$dst"; }
   if [ -L "$dst" ]; then
     tgt="$(readlink "$dst")"
-    case "$tgt" in /*) : ;; *) tgt="$(cd "$(dirname "$dst")" && cd "$(dirname "$tgt")" 2>/dev/null && pwd)/$(basename "$tgt")" ;; esac
+    # Keep a relative target intelligible even when its old parent directory
+    # vanished. Canonicalising it by cd'ing through that parent would fail and
+    # hide the trailing bin/<name> identity needed for safe stale-link repair.
+    case "$tgt" in /*) : ;; *) tgt="$(cd "$(dirname "$dst")" && pwd)/$tgt" ;; esac
     case "$tgt" in
-      */bin/ahp|*/bin/ahp-mcp)
+      */bin/"$name")
         if [ -f "$(dirname "$tgt")/../SPEC.md" ] || [ "$tgt" = "$src" ]; then
           ln -sf "$src" "$dst"; _did
+        elif [ ! -e "$dst" ]; then
+          case "$tgt" in
+            */agent-handoff-protocol/bin/"$name") ln -sf "$src" "$dst"; _did ;;
+            *) warn "$name left as-is" "$dst → $tgt (broken link is not identifiable as AHP; remove it or set AHP_BIN_DIR)" ;;
+          esac
         else warn "$name left as-is" "$dst → $tgt (not an AHP checkout; remove it or set AHP_BIN_DIR)"; fi ;;
       *) warn "$name left as-is" "$dst → $tgt (not ours; remove it or set AHP_BIN_DIR)" ;;
     esac

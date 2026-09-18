@@ -7,6 +7,15 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.8.2 — 2026-09-18
+
+- Re-running the installer after moving an AHP checkout now repairs its broken
+  `ahp` and `ahp-mcp` command symlinks. A stale target ending in the expected
+  `bin/<command>` entrypoint is repointed to the current checkout, so the
+  self-test no longer reports a command that resolves on `PATH` but cannot run.
+- The installer continues to leave real files, directories, and live symlinks
+  to non-AHP commands untouched.
+
 ## 0.8.1 — 2026-09-10
 
 - The installer now detects Claude Desktop on Linux. Its config path is derived
