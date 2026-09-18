@@ -1,5 +1,7 @@
-// Thin, read-only Git helpers. Every call is `git` with a fixed argv and
-// shell:false. AHP never mutates a project's Git state.
+// Thin Git helpers. Every call is `git` with a fixed argv and shell:false.
+// Normal AHP operations never mutate project history or tracked files. The
+// sole local mutation is an AHP identity in Git local config for repositories
+// without a remote, so their external-store identity survives a directory move.
 
 import { spawnSync } from "node:child_process";
 
@@ -73,6 +75,16 @@ export function workingTree(cwd) {
 export function remoteUrl(cwd, name = "origin") {
   const r = git(cwd, ["remote", "get-url", name]);
   return r.ok && r.out !== "" ? r.out : null;
+}
+
+export function localConfig(cwd, key) {
+  const r = git(cwd, ["config", "--local", "--get", key]);
+  return r.ok && r.out !== "" ? r.out : null;
+}
+
+export function setLocalConfig(cwd, key, value) {
+  const r = git(cwd, ["config", "--local", key, value]);
+  if (!r.ok) throw new Error(`could not write Git local config ${key}: ${r.err || "git config failed"}`);
 }
 
 // Normalize a remote URL to a stable identity key:

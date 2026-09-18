@@ -7,6 +7,14 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.8.3 — 2026-09-18
+
+- A write from a moved remote-backed checkout now records its new root and
+  last-seen location in the central registry; read-only commands remain pure.
+- Remote-less Git repositories now receive a random `ahp.project-id` in their
+  Git local config on first write. That untracked, non-history identity keeps
+  their central AHP worklog stable when the checkout moves.
+
 ## 0.8.2 — 2026-09-18
 
 - Re-running the installer after moving an AHP checkout now repairs its broken

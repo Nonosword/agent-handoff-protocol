@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { canonicalWorkerId, WORKERS } from "../src/worker-detect.mjs";
 import { project, makeSessionId, assertCanOpen, assertCanPromote, assertCanEnd } from "../src/lifecycle.mjs";
+import * as projectRegistry from "../src/project.mjs";
 import { REQUIRED, RECORD_TYPES, GATES, END_REASONS, validateRecords } from "../src/validate.mjs";
 import { explainStoreFsError } from "../src/storage-errors.mjs";
 import { colors as dashboardColors, drawFrame } from "../src/dashboard.mjs";
@@ -726,6 +727,58 @@ test("verify: strict by default, notes never fatal, --lenient downgrades warning
   assert.equal(r2.code, 1);
   assert.match(r2.err, /no baton held/);
   assert.equal(sh(process.execPath, [path.join(REPO, "tools", "verify-worklog.mjs"), "--file", wl2, "--lenient"]).code, 1);
+});
+
+test("a remote-backed Project self-heals its moved root only on write", () => {
+  const root = mkrepo("project-move-remote-old");
+  const home = path.join(TMP, "project-move-remote-store");
+  sh("git", ["remote", "add", "origin", "https://github.com/example/project-move.git"], root);
+  const original = projectRegistry.register({ cwd: root, home });
+  const oldRoot = projectRegistry.identify(root).root;
+  const moved = path.join(TMP, "project-move-remote-new");
+  fs.renameSync(root, moved);
+  const newRoot = projectRegistry.identify(moved).root;
+
+  const read = projectRegistry.resolve({ cwd: moved, home, registerMissing: false });
+  assert.equal(read.id, original.id);
+  assert.deepEqual(projectRegistry.list(home)[0].roots, [oldRoot], "read resolution must not mutate registry roots");
+
+  const written = projectRegistry.resolve({ cwd: moved, home, registerMissing: true });
+  assert.equal(written.id, original.id);
+  const entry = projectRegistry.list(home)[0];
+  assert.deepEqual(entry.roots, [oldRoot, newRoot]);
+  assert.equal(projectRegistry.loadRegistry(home).projects[original.id].lastSeenRoot, newRoot);
+});
+
+test("a remote-less Project gets a Git-local identity that survives a move", () => {
+  const root = mkrepo("project-move-local-old");
+  const home = path.join(TMP, "project-move-local-store");
+  assert.equal(projectRegistry.identify(root).localId, null, "reads do not mint local identity");
+  const original = projectRegistry.register({ cwd: root, home });
+  const localId = projectRegistry.identify(root).localId;
+  const oldRoot = projectRegistry.identify(root).root;
+  assert.match(localId, /^local-[0-9a-f-]{36}$/i);
+  assert.equal(original.id, localId);
+  const moved = path.join(TMP, "project-move-local-new");
+  fs.renameSync(root, moved);
+  const newRoot = projectRegistry.identify(moved).root;
+  const resolved = projectRegistry.resolve({ cwd: moved, home, registerMissing: true });
+  assert.equal(resolved.id, original.id);
+  const entry = projectRegistry.loadRegistry(home).projects[original.id];
+  assert.deepEqual(entry.roots, [oldRoot, newRoot]);
+  assert.equal(entry.localId, localId);
+});
+
+test("a legacy remote-less Project gains its local identity without splitting history", () => {
+  const root = mkrepo("project-local-legacy");
+  const home = path.join(TMP, "project-local-legacy-store");
+  const canonicalRoot = projectRegistry.identify(root).root;
+  projectRegistry.saveRegistry(home, { version: 1, projects: {
+    legacy: { name: "legacy", remote: null, roots: [canonicalRoot], created: "2026-01-01T00:00:00.000Z" }
+  }});
+  const resolved = projectRegistry.resolve({ cwd: root, home, registerMissing: true });
+  assert.equal(resolved.id, "legacy");
+  assert.match(projectRegistry.loadRegistry(home).projects.legacy.localId, /^local-[0-9a-f-]{36}$/i);
 });
 
 test("project B worklog is isolated from A", () => {

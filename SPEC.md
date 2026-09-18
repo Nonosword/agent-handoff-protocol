@@ -123,8 +123,9 @@ The records and procedures are identical under either binding:
   with `.coworker/` in the project's ignore file. A legacy
   `.coworker/worklog.jsonl` is the synthetic `main` Lane.
 - **External store.** A per-user store outside every project, grouped by project
-  identity (§4.4), with one worklog per Lane. The project repository is not
-  touched at all. This is what the reference `ahp` implementation uses by
+  identity (§4.4), with one worklog per Lane. No tracked project file or Git
+  history is touched. An implementation MAY write a private Git local-config
+  identity for a remote-less repository as specified in §4.4. This is what the reference `ahp` implementation uses by
   default, at `$XDG_DATA_HOME/agent-handoff/` (falling back to
   `~/.local/share/agent-handoff/`). A pre-Lane project worklog is exposed as the
   synthetic `main` Lane. An implementation MAY persist lifecycle metadata for
@@ -142,10 +143,15 @@ directories and, where possible, across re-clones. Derive it from VCS:
 - if an `origin` remote is configured — a slug of the **normalized remote URL**
   (`git@github.com:User/Repo.git` and `https://github.com/User/Repo` both reduce
   to `github.com/user/repo`);
-- otherwise — the repository's top-level path plus a short hash of it.
+- otherwise — a random implementation identity persisted in Git local config,
+  so it moves with the checkout without entering history. A legacy implementation
+  MAY fall back to the repository's top-level path plus a short hash until its
+  first write creates that local identity.
 
 The implementation SHOULD keep a registry recording each project's name, remote
-and every local path it has been seen at, so a moved checkout still resolves.
+and every local path it has been seen at. A write resolved through a moved
+checkout SHOULD append that root atomically; read-only commands MUST NOT update
+the registry merely by observing it.
 
 ### 4.5 Lane resolution
 

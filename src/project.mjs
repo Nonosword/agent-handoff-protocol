@@ -3,7 +3,9 @@
 // A project's id is derived from Git, so `ahp` works from any subdirectory and
 // recognizes the same project after a re-clone (when it has a remote):
 //   - remote `origin` present  -> slug of the normalized remote URL
-//   - no remote                -> "<basename>-<short hash of the toplevel path>"
+//   - no remote                -> a Git-local random AHP identity (minted on
+//                                  the first write); legacy reads fall back to
+//                                  "<basename>-<short hash of the toplevel path>"
 //
 // The registry (<store>/projects.json) records name, remote and every local
 // path a project has been seen at, so a moved checkout still resolves.
@@ -22,6 +24,18 @@ function slug(s) {
 
 function shortHash(s) {
   return crypto.createHash("sha256").update(s).digest("hex").slice(0, 8);
+}
+
+const LOCAL_ID_KEY = "ahp.project-id";
+const LOCAL_ID_RE = /^local-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function localId(cwd, { create = false } = {}) {
+  const existing = git.localConfig(cwd, LOCAL_ID_KEY);
+  if (existing && LOCAL_ID_RE.test(existing)) return existing;
+  if (!create) return null;
+  const minted = `local-${crypto.randomUUID()}`;
+  git.setLocalConfig(cwd, LOCAL_ID_KEY, minted);
+  return minted;
 }
 
 export function loadRegistry(home) {
@@ -88,13 +102,14 @@ function mutateRegistry(home, operation) {
 }
 
 // Compute the id + descriptor for whatever project contains `cwd`.
-export function identify(cwd) {
+export function identify(cwd, { createLocalId = false } = {}) {
   if (!git.isGitRepo(cwd)) return null;
   const top = git.topLevel(cwd);
   const remote = git.remoteUrl(cwd);
   const normRemote = git.normalizeRemote(remote);
-  const id = normRemote ? slug(normRemote) : `${slug(path.basename(top))}-${shortHash(top)}`;
-  return { id, root: top, remote: remote ?? null, normRemote: normRemote ?? null, name: path.basename(top) };
+  const local = normRemote ? null : localId(cwd, { create: createLocalId });
+  const id = normRemote ? slug(normRemote) : local ?? `${slug(path.basename(top))}-${shortHash(top)}`;
+  return { id, root: top, remote: remote ?? null, normRemote: normRemote ?? null, localId: local, name: path.basename(top) };
 }
 
 // Resolve the active project. Precedence: explicit > env > cwd git > error.
@@ -124,17 +139,17 @@ export function resolve({ cwd = process.cwd(), project = null, env = process.env
   if (!ident) {
     throw new Error("not inside a Git repository — pass --project <id|name> or run `ahp project add`");
   }
-  // match registry by id, remote or a known root
+  // Match by stable identity, then fall back to a known legacy root.
   for (const [id, entry] of Object.entries(registry.projects)) {
     // A slug is intentionally human-readable, not a globally unique remote
     // identity. Never let a punctuation/length collision silently join two
     // remotes into one worklog. Old registries retain their ids when the remote
     // itself matches; a conflicting remote receives a suffixed id on register.
-    if (id === ident.id && sameRemote(entry, ident)) return descriptor(id, entry, home, { source: "git", operationRoot: ident.root });
+    if (id === ident.id && sameIdentity(entry, ident)) return resolvedProject(id, entry, ident, home, registerMissing, "git");
     if (ident.normRemote && entry.remote && git.normalizeRemote(entry.remote) === ident.normRemote) {
-      return descriptor(id, entry, home, { source: "git-remote", operationRoot: ident.root });
+      return resolvedProject(id, entry, ident, home, registerMissing, "git-remote");
     }
-    if ((entry.roots ?? []).includes(ident.root)) return descriptor(id, entry, home, { source: "git-path", operationRoot: ident.root });
+    if (sameIdentity(entry, ident)) return resolvedProject(id, entry, ident, home, registerMissing, "git-path");
   }
   // Read-only commands can derive the stable descriptor without touching the
   // registry. The first write command will persist the same identity.
@@ -150,20 +165,30 @@ export function resolve({ cwd = process.cwd(), project = null, env = process.env
   return register({ cwd, home, name: ident.name, autoreg: true });
 }
 
-function sameRemote(entry, ident) {
-  // A remote-less project is identified by its checkout root. For a remote
-  // project, equality must be based on the normalized remote, not its slug.
+function sameIdentity(entry, ident) {
+  // Remote-backed projects use the normalized remote. Remote-less projects
+  // prefer their Git-local UUID; legacy entries fall back to their known root.
   if (ident.normRemote) return !!entry.remote && git.normalizeRemote(entry.remote) === ident.normRemote;
+  if (ident.localId) return entry.localId === ident.localId;
   return (entry.roots ?? []).includes(ident.root);
 }
 
 function matchingCheckout(entry, cwd) {
   const ident = identify(cwd);
-  return ident && sameRemote(entry, ident) ? ident.root : null;
+  return ident && sameIdentity(entry, ident) ? ident.root : null;
+}
+
+function resolvedProject(id, entry, ident, home, registerMissing, source) {
+  // Reads are side-effect free. A write records the checkout that actually
+  // performed it, so a moved root self-heals in the central registry.
+  if (registerMissing && (!entry.roots?.includes(ident.root) || (!ident.normRemote && !entry.localId))) {
+    return register({ cwd: ident.root, home, name: entry.name ?? null, autoreg: true });
+  }
+  return descriptor(id, entry, home, { source, operationRoot: ident.root });
 }
 
 function availableId(registry, ident) {
-  if (!registry.projects[ident.id] || sameRemote(registry.projects[ident.id], ident)) return ident.id;
+  if (!registry.projects[ident.id] || sameIdentity(registry.projects[ident.id], ident)) return ident.id;
   // Keep the old concise id for every existing project. A deterministic suffix
   // only appears for the previously ambiguous collision case.
   const suffix = shortHash(ident.normRemote ?? ident.root);
@@ -203,18 +228,27 @@ function descriptor(id, entry, home, meta) {
 
 // Add (or update) the project containing cwd to the registry.
 export function register({ cwd = process.cwd(), home, name = null, autoreg = false }) {
-  const ident = identify(cwd);
+  const ident = identify(cwd, { createLocalId: true });
   if (!ident) throw new Error("not inside a Git repository");
   return mutateRegistry(home, (registry) => {
-    const id = availableId(registry, ident);
-    const existing = registry.projects[id] ?? { roots: [] };
+    // A pre-0.8.3 remote-less entry has no localId yet. Its currently known
+    // root is the only safe bridge for minting that identity in place rather
+    // than splitting its existing worklog into a new Project.
+    const matched = Object.entries(registry.projects).find(([, entry]) =>
+      sameIdentity(entry, ident) || (!ident.normRemote && (entry.roots ?? []).includes(ident.root))
+    );
+    const id = matched?.[0] ?? availableId(registry, ident);
+    const existing = matched?.[1] ?? registry.projects[id] ?? { roots: [] };
     const entryName = name ?? existing.name ?? ident.name;
     assertNameAvailable(registry, entryName, id);
     const entry = {
       name: entryName,
       remote: ident.remote ?? existing.remote ?? null,
       roots: [...new Set([...(existing.roots ?? []), ident.root])],
-      created: existing.created ?? new Date().toISOString()
+      created: existing.created ?? new Date().toISOString(),
+      ...(ident.localId ? { localId: ident.localId } : existing.localId ? { localId: existing.localId } : {}),
+      lastSeenRoot: ident.root,
+      lastSeenAt: new Date().toISOString()
     };
     registry.projects[id] = entry;
     return { ...descriptor(id, entry, home, { source: autoreg ? "autoregistered" : "registered", operationRoot: ident.root }), autoreg };
