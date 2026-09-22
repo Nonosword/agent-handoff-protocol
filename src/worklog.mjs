@@ -2,7 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { parseJsonl, validateRecords } from "./validate.mjs";
+import { parseJsonl, validateRecords, messageSeqs } from "./validate.mjs";
 import { project } from "./lifecycle.mjs";
 import { explainStoreFsError } from "./storage-errors.mjs";
 
@@ -172,7 +172,7 @@ function syncDirectory(dir) {
 // `precondition(records, full)` and `derive(full, entries)` run under the same
 // lock after re-reading the worklog. This makes lifecycle checks atomic with the
 // append rather than trusting an earlier snapshot.
-export function appendRecord(worklogFile, lockFile, record, { now = () => new Date().toISOString(), precondition, derive } = {}) {
+export function appendRecord(worklogFile, lockFile, record, { now = () => new Date().toISOString(), precondition, derive, acceptedThroughSeq = null } = {}) {
   let lockToken;
   try {
     fs.mkdirSync(path.dirname(worklogFile), { recursive: true });
@@ -184,10 +184,10 @@ export function appendRecord(worklogFile, lockFile, record, { now = () => new Da
       effect: "No worklog record was written."
     });
   }
-  return appendUnderLock(worklogFile, record, { now, precondition, derive, lockFile, lockToken });
+  return appendUnderLock(worklogFile, record, { now, precondition, derive, lockFile, lockToken, acceptedThroughSeq });
 }
 
-function appendUnderLock(worklogFile, record, { now, precondition, derive, lockFile, lockToken }) {
+function appendUnderLock(worklogFile, record, { now, precondition, derive, lockFile, lockToken, acceptedThroughSeq }) {
   try {
     let text;
     let entries;
@@ -206,9 +206,26 @@ function appendUnderLock(worklogFile, record, { now, precondition, derive, lockF
     const records = entries.map((entry) => entry.record);
     if (precondition) precondition(records, full);
     if (derive) Object.assign(full, derive(full, entries));
-    const validation = validateRecords([...entries, { record: full, no: entries.length + 1 }]);
-    if (validation.errors.length) {
-      throw new Error(`refusing to append an invalid worklog record:\n${validation.errors.join("\n")}`);
+    const candidate = [...entries, { record: full, no: entries.length + 1 }];
+    const validation = validateRecords(candidate);
+    // An operator disposition acknowledges history through a seq as immutable
+    // and reviewed (SPEC §12). Errors at or below that seq no longer block a
+    // new session; anything newer still does, so the acknowledgement can never
+    // be used to wave through a fresh mistake.
+    const blocking = acceptedThroughSeq == null
+      ? validation.errors
+      : (() => {
+          const seqs = messageSeqs(validation.errors, candidate);
+          return validation.errors.filter((_, i) => seqs[i] === null || seqs[i] > acceptedThroughSeq);
+        })();
+    if (blocking.length) {
+      throw new Error(
+        `refusing to append an invalid worklog record:\n${blocking.join("\n")}\n\n` +
+        `These are existing records; a new session cannot be opened over a Lane that does not verify. ` +
+        `Either archive the invalid history with \`ahp compact --archive-invalid\`, or, after operator ` +
+        `review, acknowledge it with \`ahp lane edit <id> --status done --operator-disposition "<reason>"\` ` +
+        `and start again. Records are never rewritten by either route.`
+      );
     }
     const line = `${JSON.stringify(full)}\n`;
     let fd;

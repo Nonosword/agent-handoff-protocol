@@ -61,7 +61,9 @@ Before stopping (you may be cut off without warning):
 When the whole Lane is complete, run `ahp end --lane <id> --reason task-done ...`,
 then `ahp lane edit <id> --status done`. Ending a session never changes
 Lane status. Never archive automatically, and never invent an operator
-disposition for invalid immutable history.
+disposition or run `compact --archive-invalid` for invalid immutable history. If
+a write is refused because the Lane does not verify, stop and report the exact
+error for the operator to act on.
 
 Never cross a commit boundary with a dirty tree that no open intent describes.
 

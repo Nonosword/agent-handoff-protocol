@@ -121,8 +121,11 @@ Lane 生命周期是：
 通过。`ahp end --reason task-done` 只释放 session baton，不会改变 Lane 状态；
 整个 Lane 完成后还要执行 `ahp lane edit <id> --status done`。若不可变的旧记录
 存在验证错误，operator 可以用 `--operator-disposition "<原因>"` 明确处置；
-AHP 会把 worklog SHA-256、被审核的问题、原因和时间写入 Lane metadata。
-这不会让 verify 假装通过，agent 也不得自行编造或使用该处置。
+AHP 会把 worklog SHA-256、被审核的问题、已审核到的最大 `seq`、原因和时间写入
+Lane metadata。凭这个 `seq`，新 session 可以在已确认的历史之上继续追加，Lane
+不会因为旧错误被永久锁死。另一条路是 `ahp compact --archive-invalid`：把不通过
+校验的前缀移进 archive，但仅当保留下来的 session 自身能通过校验时才执行。
+这两者都不会让 verify 假装通过，agent 也不得自行编造或使用该处置。
 
 Claude Desktop 等不继承仓库 cwd 的 host 应先调用 MCP `ahp_project_list`，再把
 返回的已注册 `project` 与同一个 `lane` 带到每次调用中；也可以始终传绝对

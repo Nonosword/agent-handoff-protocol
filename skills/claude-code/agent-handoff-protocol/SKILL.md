@@ -128,8 +128,10 @@ ahp lane edit <id> --status done
 
 `handoff.end` releases only the session baton; it never changes Lane status.
 Never archive automatically. Invalid immutable history requires an
-operator-reviewed CLI `--operator-disposition`; an agent must never invent or
-apply one.
+operator-reviewed CLI `--operator-disposition` or `ahp compact
+--archive-invalid`; an agent must never invent or run either. If a write is
+refused because the Lane does not verify, stop, report the exact error, and ask
+the operator to choose a route.
 
 ## Other
 

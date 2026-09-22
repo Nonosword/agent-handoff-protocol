@@ -96,6 +96,21 @@ export function parseJsonl(text) {
 //              downgrades them.
 //   notes    — expected, valid situations worth pointing at (a hard cutoff, an
 //              open intent mid-work). Never fatal, in any mode.
+// Which record does a positional message blame? Every positional message this
+// module emits is prefixed `line N:` (1-based, into the entries it was given).
+// Recovering the record's `seq` lets a caller reason about *which* records are
+// at fault across a rewrite: line numbers shift when a prefix is archived, seq
+// never does. A message with no line prefix, or one pointing past the entries,
+// yields null — callers must treat that as "cannot attribute", never as safe.
+export function messageSeqs(messages, entries) {
+  return messages.map((message) => {
+    const hit = /^line (\d+):/.exec(message);
+    if (!hit) return null;
+    const entry = entries[Number(hit[1]) - 1];
+    return Number.isSafeInteger(entry?.record?.seq) ? entry.record.seq : null;
+  });
+}
+
 export function validateRecords(entries) {
   const errors = [];
   const warnings = [];

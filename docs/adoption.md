@@ -125,6 +125,32 @@ restart Codex / Cursor / VS Code / Windsurf.
 keeping any still-open intent in that Lane's live file.
 Run it when `ahp log` gets long. Records are only ever *moved*, never rewritten.
 
+## Recovering a Lane whose history does not verify
+
+Both `compact` and every write validate the whole worklog, so historical errors
+— records from before a rule existed, or a session whose `handoff.start` lost
+its worker identity — otherwise freeze the Lane: nothing compacts and nothing
+new can be appended. `verify --lenient` does not help; it downgrades warnings,
+not errors. Two operator routes, neither of which rewrites a record:
+
+```sh
+ahp compact --archive-invalid --keep N   # move the invalid prefix to the archive
+```
+
+It refuses, before writing anything, unless the sessions you keep verify on
+their own — and then names the largest `--keep` that would work. The archived
+records stay readable in `archive/<firstSeq>-<lastSeq>.jsonl`.
+
+```sh
+ahp lane edit <id> --status done --operator-disposition "<what you reviewed>"
+```
+
+Use this when the history must stay live. It records the worklog hash, the
+reviewed issues and the highest reviewed `seq`; a new `start --lane <id>` may
+then append over the acknowledged records. `verify` keeps reporting them — the
+disposition acknowledges history, it does not clear it — and any *new* failure
+above that `seq` still blocks. Agents never invent this override; it is yours.
+
 ## Back up the store (optional)
 
 The store is plain files. `git init` it and push to a private remote, or let

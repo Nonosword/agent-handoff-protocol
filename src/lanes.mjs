@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { explainStoreFsError } from "./storage-errors.mjs";
 import { acquireLock, releaseLock, analyze, readEntries, writeFileAtomic } from "./worklog.mjs";
+import { messageSeqs } from "./validate.mjs";
 
 export const LEGACY_LANE_ID = "main";
 export const LEGACY_LANE_TITLE = "Main / legacy";
@@ -59,6 +60,10 @@ function validateFile(data) {
           typeof disposition.at !== "string" || !disposition.at ||
           typeof disposition.reason !== "string" || !disposition.reason.trim() ||
           typeof disposition.worklogSha256 !== "string" || !/^[a-f0-9]{64}$/.test(disposition.worklogSha256) ||
+          // Optional: dispositions written before seq-bounded acknowledgement
+          // carry only the hash and stay readable.
+          (disposition.throughSeq !== undefined &&
+            (!Number.isSafeInteger(disposition.throughSeq) || disposition.throughSeq < 0)) ||
           !Array.isArray(disposition.errors) || disposition.errors.some((value) => typeof value !== "string") ||
           !Array.isArray(disposition.warnings) || disposition.warnings.some((value) => typeof value !== "string")) {
         throw new Error(`Lane "${id}" verificationDisposition is invalid`);
@@ -238,12 +243,20 @@ export function edit(project, wanted, patch) {
         const issues = [...state.validation.errors, ...state.validation.warnings];
         if (issues.length) {
           const worklogSha256 = sha256File(current.worklog);
-          const existingAccepted = candidate.verificationDisposition?.worklogSha256 === worklogSha256;
+          const prior = candidate.verificationDisposition;
+          // A disposition acknowledges history *through a seq*, so appending
+          // clean work after a review does not force the operator to review
+          // again. The hash still identifies the exact file that was read; the
+          // seq is what survives later appends and a compaction.
+          const coveredThroughSeq = Number.isSafeInteger(prior?.throughSeq)
+            && messageSeqs(issues, readEntries(current.worklog)).every((seq) => seq !== null && seq <= prior.throughSeq);
+          const existingAccepted = prior?.worklogSha256 === worklogSha256 || coveredThroughSeq;
           if (patch.operatorDisposition?.trim()) {
             candidate.verificationDisposition = {
               at: new Date().toISOString(),
               reason: patch.operatorDisposition.trim(),
               worklogSha256,
+              throughSeq: state.lastSeq,
               errors: [...state.validation.errors],
               warnings: [...state.validation.warnings]
             };

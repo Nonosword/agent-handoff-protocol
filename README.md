@@ -153,8 +153,11 @@ path remain immutable.
 Lane status. When the whole Lane is complete, follow it with
 `ahp lane edit <id> --status done`. If immutable historical records fail strict
 verification, an operator may preserve and acknowledge the exact worklog with
-`--operator-disposition "<reason>"`; AHP stores its SHA-256 and the reviewed
-errors in Lane metadata.
+`--operator-disposition "<reason>"`; AHP stores its SHA-256, the reviewed errors
+and the highest reviewed `seq`, which lets a new session append over the
+acknowledged history instead of leaving the Lane permanently unwritable.
+`ahp compact --archive-invalid` is the other route: it retires such a prefix
+into the archive, but only when the retained sessions verify on their own.
 Agents must never invent that disposition, and AHP never silently ignores the
 underlying verification result.
 A commit may legitimately be promoted by intents in multiple Lanes: AHP records

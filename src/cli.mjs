@@ -9,7 +9,7 @@ import * as project from "./project.mjs";
 import * as lanes from "./lanes.mjs";
 import { storeHome } from "./paths.mjs";
 import { readEntries, analyze, appendRecord, acquireLock, releaseLock, writeFileAtomic } from "./worklog.mjs";
-import { validateRecords } from "./validate.mjs";
+import { validateRecords, messageSeqs } from "./validate.mjs";
 import { assertBatonOwner, assertCanOpen, assertCanPromote, assertCanEnd, makeSessionId, currentSessionId, project as projectState } from "./lifecycle.mjs";
 import { renderStatus, renderPickup, renderLog } from "./render.mjs";
 import { detectRuntime, canonicalWorkerId } from "./worker-detect.mjs";
@@ -63,8 +63,11 @@ PROJECTS
   project forget <id|name>
 
 MAINTENANCE
-  compact [--keep N]     move old worklog sessions to archive files; does not
-                         change Lane lifecycle status (default: keep 3)
+  compact [--keep N] [--archive-invalid]
+                         move old worklog sessions to archive files; does not
+                         change Lane lifecycle status (default: keep 3).
+                         --archive-invalid also retires a prefix that fails
+                         verification, provided the kept sessions verify.
   upgrade [--check]      git pull this checkout, then re-run the installer so
                          every host picks up the new skill / MCP registration.
                          --check only reports whether an update is available.
@@ -209,6 +212,14 @@ function requireProjectGit(proj) {
   const knownRoots = [...new Set([proj.lastSeenRoot, ...(proj.roots ?? [])].filter(Boolean))];
   const root = knownRoots.find((candidate) => git.isGitRepo(candidate));
   return root ?? (git.isGitRepo(process.cwd()) ? git.topLevel(process.cwd()) : null);
+}
+
+// Seq through which an operator has reviewed and accepted this Lane's history
+// (`lane edit --operator-disposition`). Errors at or below it no longer block a
+// new session; see appendRecord.
+function acceptedThroughSeq(proj) {
+  const seq = proj.lane?.verificationDisposition?.throughSeq;
+  return Number.isSafeInteger(seq) ? seq : null;
 }
 
 function laneTarget(proj, lane) {
@@ -557,7 +568,7 @@ function cmdStart(rest, home) {
         sessionId: makeSessionId(full.worker, full.at, full.seq),
         ...(full.continuesFrom === undefined ? { continuesFrom: expected } : {})
       };
-    }, precondition: () => assertLaneWritable(proj) });
+    }, precondition: () => assertLaneWritable(proj), acceptedThroughSeq: acceptedThroughSeq(proj) });
   } catch (error) {
     if (reopenedFromDone) {
       try {
@@ -609,7 +620,8 @@ function intentOpen(rest, home) {
       assertCanOpen(records, values.id);
       assertBatonOwner(records, actor);
     },
-    derive: (_full, entries) => currentSessionPatch(entries)
+    derive: (_full, entries) => currentSessionPatch(entries),
+    acceptedThroughSeq: acceptedThroughSeq(proj)
   });
   process.stdout.write(`intent.open seq ${rec.seq} — ${values.id}\n`);
   return 0;
@@ -640,7 +652,8 @@ function intentPromote(rest, home) {
       assertCanPromote(records, { id: values.id, gate: values.gate, commits, landmines: values.landmine ?? [] });
       assertBatonOwner(records, actor);
     },
-    derive: (_full, entries) => currentSessionPatch(entries)
+    derive: (_full, entries) => currentSessionPatch(entries),
+    acceptedThroughSeq: acceptedThroughSeq(proj)
   });
   process.stdout.write(`intent.promote seq ${rec.seq} — ${values.id} → ${commits.join(", ") || "(wip)"} [gate ${values.gate}]\n`);
   return 0;
@@ -675,7 +688,8 @@ function cmdEnd(rest, home) {
     derive: (_full, entries) => {
       const state = projectState(entries.map((entry) => entry.record));
       return { ...currentSessionPatch(entries), openIntents: state.openIntents.map((intent) => intent.intentId) };
-    }
+    },
+    acceptedThroughSeq: acceptedThroughSeq(proj)
   });
   process.stdout.write(`handoff.end seq ${rec.seq} — ${values.reason} at ${rec.end.commit.slice(0, 12)} (gate ${rec.end.gate})\n`);
   if (rec.openIntents.length) {
@@ -787,8 +801,9 @@ function cmdLane(rest, home) {
 // --- compaction -------------------------------------------------------
 
 function cmdCompact(rest, home) {
-  const { values } = parse(rest, { keep: { type: "string" } });
+  const { values } = parse(rest, { keep: { type: "string" }, "archive-invalid": { type: "boolean" } });
   const keep = values.keep ? Number(values.keep) : 3;
+  const archiveInvalid = !!values["archive-invalid"];
   if (!Number.isSafeInteger(keep) || keep < 1) throw new Error("--keep must be a safe integer of at least 1");
   const proj = resolveTarget(values, { registerMissing: true });
   let token;
@@ -800,7 +815,13 @@ function cmdCompact(rest, home) {
     const entries = readEntries(proj.worklog);
     if (entries.length === 0) { process.stdout.write("(nothing to compact)\n"); return 0; }
     const validation = validateRecords(entries);
-    if (validation.errors.length) throw new Error(`refusing to compact an invalid worklog:\n${validation.errors.join("\n")}`);
+    if (validation.errors.length && !archiveInvalid) {
+      throw new Error(
+        `refusing to compact an invalid worklog:\n${validation.errors.join("\n")}\n\n` +
+        `These are historical records. \`ahp compact --archive-invalid\` moves the invalid prefix into ` +
+        `an archive file and keeps only a live worklog that verifies — records are moved, never rewritten.`
+      );
+    }
 
     const startIdx = entries.map((e, i) => (e.record.type === "handoff.start" ? i : -1)).filter((i) => i >= 0);
     if (startIdx.length <= keep) { process.stdout.write(`only ${startIdx.length} session(s); keeping all\n`); return 0; }
@@ -822,13 +843,38 @@ function cmdCompact(rest, home) {
       cutIdx = Math.min(cutIdx, ownerStart);
     }
     // Never archive a hard-cutoff session. A later start is valid recovery, but
-    // the incomplete predecessor remains live for a human to reconcile.
-    for (const start of startIdx) {
-      if (start >= cutIdx) break;
-      const next = startIdx.find((candidate) => candidate > start) ?? entries.length;
-      if (!entries.slice(start + 1, next).some((entry) => entry.record.type === "handoff.end")) cutIdx = Math.min(cutIdx, start);
+    // the incomplete predecessor remains live for a human to reconcile. Under
+    // --archive-invalid that guard would only re-block the recovery it exists
+    // to protect: the operator is deliberately retiring unreconcilable history,
+    // and the archive file keeps every record readable.
+    if (!archiveInvalid) {
+      for (const start of startIdx) {
+        if (start >= cutIdx) break;
+        const next = startIdx.find((candidate) => candidate > start) ?? entries.length;
+        if (!entries.slice(start + 1, next).some((entry) => entry.record.type === "handoff.end")) cutIdx = Math.min(cutIdx, start);
+      }
     }
     if (cutIdx === 0) { process.stdout.write("no closed session prefix can be safely archived\n"); return 0; }
+
+    // Decide before writing anything: --archive-invalid only helps when every
+    // invalid record falls inside the prefix being archived. An error that lands
+    // in the sessions being kept needs a smaller --keep, or a real repair.
+    if (validation.errors.length) {
+      const idxOfSeq = new Map(entries.map((e, i) => [e.record.seq, i]));
+      const badIdx = messageSeqs(validation.errors, entries)
+        .map((seq) => (seq === null ? entries.length - 1 : idxOfSeq.get(seq) ?? entries.length - 1));
+      const lastBad = Math.max(...badIdx);
+      if (lastBad >= cutIdx) {
+        const maxKeep = startIdx.filter((i) => i > lastBad).length;
+        throw new Error(
+          `--archive-invalid cannot clear this Lane at --keep ${keep}: invalid records reach seq ` +
+          `${entries[lastBad].record.seq}, inside the session(s) being kept.\n` +
+          (maxKeep >= 1
+            ? `Retry with --keep ${maxKeep} or lower to archive them too.`
+            : `Every session still holds invalid records; reconcile them by hand (the store is plain JSONL) before compacting.`)
+        );
+      }
+    }
 
     const archived = entries.slice(0, cutIdx);
     const live = entries.slice(cutIdx);
@@ -836,6 +882,12 @@ function cmdCompact(rest, home) {
     const last = archived.at(-1).record.seq;
     const archiveText = archived.map((e) => JSON.stringify(e.record)).join("\n") + "\n";
     const liveText = live.map((e) => JSON.stringify(e.record)).join("\n") + "\n";
+    // Validate the replacement before publishing anything: a compaction that
+    // cannot produce a valid live worklog must leave no trace at all.
+    const rewritten = readEntriesText(liveText);
+    const rewrittenValidation = validateRecords(rewritten);
+    if (rewrittenValidation.errors.length) throw new Error(`compaction would produce an invalid live worklog:\n${rewrittenValidation.errors.join("\n")}`);
+
     const archDir = path.join(path.dirname(proj.worklog), "archive");
     const archFile = path.join(archDir, `${first}-${last}.jsonl`);
     if (fs.existsSync(archFile)) {
@@ -845,11 +897,14 @@ function cmdCompact(rest, home) {
       // original live worklog remains intact and a retry is idempotent.
       writeFileAtomic(archFile, archiveText);
     }
-    const rewritten = readEntriesText(liveText);
-    const rewrittenValidation = validateRecords(rewritten);
-    if (rewrittenValidation.errors.length) throw new Error(`compaction would produce an invalid live worklog:\n${rewrittenValidation.errors.join("\n")}`);
     writeFileAtomic(proj.worklog, liveText);
     process.stdout.write(`archived ${archived.length} record(s) (seq ${first}-${last}) → ${archFile}\nlive worklog: ${live.length} record(s)\n`);
+    if (validation.errors.length) {
+      process.stdout.write(
+        `${validation.errors.length} historical validation error(s) moved with them; the live worklog now verifies.\n` +
+        `They remain readable in the archive file above.\n`
+      );
+    }
     return 0;
   } finally {
     releaseLock(proj.lock, token);

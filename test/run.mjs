@@ -975,6 +975,91 @@ test("compact archives old sessions and keeps recent + open intents", () => {
   assert.equal(ahp(["verify"], P).code, 0);
 });
 
+test("compact --archive-invalid retires an invalid prefix and keeps a live worklog that verifies", () => {
+  const P = mkrepo("projArchiveInvalid");
+  for (let i = 0; i < 6; i += 1) {
+    ahp(["start", "--plan", `s${i}`, "--gate", "pass", "--evidence", "e"], P);
+    ahp(["intent", "open", "--id", `k-${i}`, "--title", "t", "--intended", "i"], P);
+    ahp(["intent", "promote", "--id", `k-${i}`, "--commit", commit(P, `c${i}`), "--gate", "pass", "--actual", "d"], P);
+    ahp(["end", "--reason", "task-done", "--summary", "s", "--gate", "pass", "--evidence", "e"], P);
+  }
+  // Historical damage in the first two sessions only: a start that lost its
+  // worker identity, then intents stranded after their session's handoff.end.
+  const worklog = ahp(["path"], P).out;
+  const before = fs.readFileSync(worklog, "utf8").trim().split("\n").map(JSON.parse);
+  for (const record of before.slice(1, 4)) record.worker = { id: "codex" }; // start stayed "unknown"
+  const second = before.slice(4, 8);
+  const damaged = [...before.slice(0, 4), second[0], second[3], second[1], second[2], ...before.slice(8)];
+  damaged.forEach((record, i) => { record.seq = i + 1; });
+  fs.writeFileSync(worklog, damaged.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  assert.equal(ahp(["verify"], P).code, 1);
+
+  const plain = ahp(["compact", "--keep", "3"], P);
+  assert.equal(plain.code, 1);
+  assert.match(plain.err, /--archive-invalid/, "the refusal names the way out");
+
+  // An error inside the sessions being kept is not something --archive-invalid
+  // may wave through; it must refuse before publishing anything.
+  const tooMany = ahp(["compact", "--keep", "5", "--archive-invalid"], P);
+  assert.equal(tooMany.code, 1);
+  assert.match(tooMany.err, /cannot clear this Lane at --keep 5/);
+  assert.match(tooMany.err, /--keep 4 or lower/);
+  assert.equal(fs.existsSync(path.join(path.dirname(worklog), "archive")), false, "a refused compaction writes nothing");
+
+  const ok = ahp(["compact", "--keep", "3", "--archive-invalid"], P);
+  assert.equal(ok.code, 0, ok.err);
+  assert.match(ok.out, /5 historical validation error\(s\) moved with them/);
+  assert.equal(ahp(["verify"], P).code, 0, "the live worklog verifies afterwards");
+  assert.equal(ahp(["start", "--plan", "resumed", "--gate", "pass", "--evidence", "e"], P).code, 0);
+  // Records are moved, never rewritten: the damaged prefix is still readable.
+  const archiveDir = path.join(path.dirname(worklog), "archive");
+  const archived = fs.readFileSync(path.join(archiveDir, fs.readdirSync(archiveDir)[0]), "utf8").trim().split("\n").map(JSON.parse);
+  assert.deepEqual(archived, damaged.slice(0, archived.length));
+});
+
+test("an operator disposition acknowledges history through a seq, and only through it", () => {
+  const P = mkrepo("projDispositionSeq");
+  for (let i = 0; i < 2; i += 1) {
+    ahp(["start", "--plan", `s${i}`, "--gate", "pass", "--evidence", "e"], P);
+    ahp(["intent", "open", "--id", `d-${i}`, "--title", "t", "--intended", "i"], P);
+    ahp(["intent", "promote", "--id", `d-${i}`, "--commit", commit(P, `c${i}`), "--gate", "pass", "--actual", "d"], P);
+    ahp(["end", "--reason", "task-done", "--summary", "s", "--gate", "pass", "--evidence", "e"], P);
+  }
+  const worklog = ahp(["path"], P).out;
+  const lane = JSON.parse(ahp(["lane", "list", "--json"], P).out)[0].id;
+  // The session that starts at `seq` keeps its "unknown" start while its own
+  // records name a worker — the identity drift this recovery path exists for.
+  const damage = (seq) => {
+    const records = fs.readFileSync(worklog, "utf8").trim().split("\n").map(JSON.parse);
+    const from = records.findIndex((record) => record.seq === seq);
+    for (const record of records.slice(from + 1, from + 4)) record.worker = { id: "codex" };
+    fs.writeFileSync(worklog, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  };
+  damage(1);
+
+  const blocked = ahp(["start", "--plan", "x", "--gate", "pass", "--evidence", "e", "--lane", lane], P);
+  assert.equal(blocked.code, 1);
+  assert.match(blocked.err, /--operator-disposition/, "the refusal names the way out");
+
+  const disposed = ahp(["lane", "edit", lane, "--status", "done", "--operator-disposition", "pre-0.5.1 identity drift; reviewed, immutable"], P);
+  assert.equal(disposed.code, 0, disposed.err);
+  assert.equal(JSON.parse(ahp(["lane", "list", "--all", "--json"], P).out)[0].verificationDisposition.throughSeq, 8);
+
+  // Acknowledged history no longer blocks a new session on that Lane.
+  assert.equal(ahp(["start", "--plan", "recovered", "--gate", "pass", "--evidence", "e", "--lane", lane], P).code, 0);
+  assert.equal(ahp(["intent", "open", "--id", "after", "--title", "t", "--intended", "i", "--lane", lane], P).code, 0);
+  assert.equal(ahp(["intent", "promote", "--id", "after", "--commit", commit(P, "later"), "--gate", "pass", "--actual", "d", "--lane", lane], P).code, 0);
+  assert.equal(ahp(["end", "--reason", "task-done", "--summary", "s", "--gate", "pass", "--evidence", "e", "--lane", lane], P).code, 0);
+  assert.equal(ahp(["verify", "--lane", lane], P).code, 1, "verify still reports the acknowledged history honestly");
+
+  // Damage *after* the acknowledged seq is new, unreviewed, and still fatal.
+  damage(9);
+  const reblocked = ahp(["start", "--plan", "y", "--gate", "pass", "--evidence", "e", "--lane", lane], P);
+  assert.equal(reblocked.code, 1);
+  assert.match(reblocked.err, /line 10:/);
+  assert.doesNotMatch(reblocked.err, /line 2:/, "already-acknowledged errors are not re-reported");
+});
+
 test("compact keeps the complete origin session of a long-lived open intent", () => {
   const P = mkrepo("projCompactLongOpen");
   ahp(["start", "--plan", "open long work", "--gate", "pass", "--evidence", "e"], P);

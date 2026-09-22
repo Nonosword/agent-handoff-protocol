@@ -192,10 +192,14 @@ Lane lifecycle has three user-facing states:
 A transition to `done` or `archived` MUST be refused while the Lane holds a
 baton or has an open intent. A strict verification failure MUST also refuse the
 transition unless an operator explicitly records a disposition that preserves
-the immutable worklog, its content hash, the reviewed errors/warnings, a reason,
-and a timestamp in Lane metadata. Such a disposition does not make verification
-pass and becomes stale if the worklog bytes change. Agents MUST NOT infer or
-invent an operator disposition. Implementations MUST NOT archive Lanes merely
+the immutable worklog, its content hash, the highest reviewed `seq`, the
+reviewed errors/warnings, a reason, and a timestamp in Lane metadata. Such a
+disposition does not make verification pass: `verify` MUST keep reporting the
+underlying failures. It acknowledges history **through that `seq` only**. An
+implementation MAY therefore let a new session append over acknowledged records
+— otherwise invalid history would make a Lane permanently unwritable — but MUST
+still refuse any record whose failure it cannot attribute to a `seq` at or below
+the acknowledged one. Agents MUST NOT infer or invent an operator disposition. Implementations MUST NOT archive Lanes merely
 because time elapsed. The former `blocked` Lane
 metadata value MAY be read for compatibility, but MUST NOT be offered as a new
 status or accept new records; session blockage belongs in `handoff.end.reason`
@@ -428,6 +432,15 @@ The worklog grows without bound. To compact (`ahp compact --keep N`):
   completed session, plus every `intent.open` that is still un-promoted. `seq`
   continues from where the live file now starts.
 - Never rewrite or renumber records. Compaction only moves whole lines.
+
+A worklog whose history fails strict verification would otherwise be permanently
+uncompactable *and* unwritable, because both operations validate the whole file.
+An implementation MAY therefore offer an explicit operator opt-in
+(`ahp compact --archive-invalid`) that moves such a prefix into the archive,
+provided it: refuses unless the retained live worklog verifies on its own;
+decides this before publishing anything; and still moves whole lines only, so
+every archived record stays readable. It MUST NOT be the default, and MUST NOT
+be used to retire records that a retained session still depends on.
 
 ## 10. VCS binding
 

@@ -7,7 +7,25 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
-## 0.8.4 — 2026-09-18
+## 0.8.5 — 2026-09-22
+
+- A Lane whose history fails strict verification is no longer frozen. Both
+  `compact` and every append validated the whole worklog and hard-refused, while
+  `--lenient` covers only warnings and an operator disposition changed lifecycle
+  status without unblocking either — so historical errors made a Lane
+  permanently uncompactable *and* unwritable.
+- Added `ahp compact --archive-invalid`: it moves an invalid prefix into the
+  archive, but only when the retained sessions verify on their own. It decides
+  before publishing anything, names the largest `--keep` that would work when
+  they do not, and still moves whole lines only, so every archived record stays
+  readable.
+- An operator disposition now records the highest reviewed `seq` alongside the
+  worklog hash, and acknowledges history through that `seq` only. A new session
+  may append over acknowledged records; `verify` keeps reporting them, and any
+  failure above that `seq` still refuses the write.
+- Both refusals now name the operator routes out instead of only stating the
+  problem. Agent-facing instructions say to stop and report such a refusal
+  rather than invent or run either route.
 
 - Failed lock-token initialization no longer leaves an empty or partial lock
   that permanently blocks a Lane, Project registry, Lane registry, or installer

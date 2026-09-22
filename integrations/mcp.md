@@ -163,5 +163,7 @@ with their `lane`. Archived Lanes are hidden unless `ahp_lane_list` receives
 `all:true`; change their status explicitly before reuse.
 `ahp_end` only releases a session baton. After a genuinely completed Lane uses
 `reason:"task-done"`, set that Lane to `done` separately. Invalid immutable
-history requires an operator-reviewed CLI disposition and cannot be bypassed
-through MCP.
+history requires an operator-reviewed CLI disposition, or `ahp compact
+--archive-invalid`; neither is exposed through MCP and neither can be bypassed
+from it. A tool call refused because the Lane does not verify is for the
+operator to resolve — report it and stop.
