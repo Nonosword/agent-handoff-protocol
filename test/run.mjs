@@ -13,7 +13,7 @@ import { project, makeSessionId, assertCanOpen, assertCanPromote, assertCanEnd }
 import * as projectRegistry from "../src/project.mjs";
 import { REQUIRED, RECORD_TYPES, GATES, END_REASONS, validateRecords } from "../src/validate.mjs";
 import { explainStoreFsError } from "../src/storage-errors.mjs";
-import { colors as dashboardColors, drawFrame } from "../src/dashboard.mjs";
+import { colors as dashboardColors, drawFrame, windowBody, scrollKeys, nextScroll } from "../src/dashboard.mjs";
 import { acquireLock, releaseLock } from "../src/worklog.mjs";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -1410,6 +1410,59 @@ test("dashboard watch is event-driven, redraws only changed rows, and consumes t
   assert.equal(narrowFrame.length, 2, "a short terminal must not scroll the alternate screen");
   assert.match(narrowWrites[0], /1234567…/);
   assert.doesNotMatch(narrowWrites[0], /\x1b\[3;/);
+
+  // The alternate screen has no scrollback, so the watch view owns its own
+  // viewport and repaints from scratch when the terminal is resized.
+  assert.match(source, /out\.on\("resize", onResize\)/);
+  assert.match(source, /resized = false; previousFrame = null/);
+  assert.match(source, /scroll = nextScroll\(frame\.scroll, frame\.maxScroll/);
+});
+
+test("dashboard watch scrolls a body taller than the terminal without losing its header", () => {
+  const head = ["", "  Agent Handoff", "  ───", "  2 active", ""];
+  const body = Array.from({ length: 20 }, (_, i) => `b${i + 1}`);
+
+  const top = windowBody(head, body, { height: 10, scroll: 0, footRows: 1 });
+  assert.equal(top.lines.length, 9, "head + body fill the height, leaving the footer row free");
+  assert.deepEqual(top.lines.slice(0, head.length), head, "the header is pinned");
+  assert.deepEqual(top.lines.slice(head.length), ["b1", "b2", "b3", "b4"], "height minus the pinned rows is the window");
+  assert.equal(top.maxScroll, 16);
+
+  const middle = windowBody(head, body, { height: 10, scroll: 5, footRows: 1 });
+  assert.deepEqual(middle.lines.slice(head.length), ["b6", "b7", "b8", "b9"]);
+  assert.deepEqual(middle.lines.slice(0, head.length), head);
+
+  const past = windowBody(head, body, { height: 10, scroll: 999, footRows: 1 });
+  assert.equal(past.scroll, 16, "scrolling past the end clamps to the last page");
+  assert.deepEqual(past.lines.at(-1), "b20");
+  assert.equal(windowBody(head, body, { height: 10, scroll: -4, footRows: 1 }).scroll, 0);
+
+  const unwindowed = windowBody(head, body, {});
+  assert.equal(unwindowed.lines.length, head.length + body.length, "the one-shot dashboard is never windowed");
+  assert.equal(unwindowed.maxScroll, 0);
+  assert.equal(windowBody(head, ["a", "b"], { height: 40, footRows: 1 }).maxScroll, 0, "a body that fits offers no scrolling");
+
+  assert.equal(scrollKeys("\x1b[A"), -1);
+  assert.equal(scrollKeys("\x1b[B"), 1);
+  assert.equal(scrollKeys("\x1b[5~"), "pageUp");
+  assert.equal(scrollKeys("\x1b[6~"), "pageDown");
+  assert.equal(scrollKeys("\x1b[H"), "top");
+  assert.equal(scrollKeys("\x1b[F"), "bottom");
+  assert.equal(scrollKeys("k"), -1);
+  assert.equal(scrollKeys("j"), 1);
+  assert.equal(scrollKeys("g"), "top");
+  assert.equal(scrollKeys("G"), "bottom");
+  assert.equal(scrollKeys("q"), "quit");
+  assert.equal(scrollKeys("x"), null, "an unhandled key must not move the view");
+  assert.equal(scrollKeys("\x1b[B\x1b[B"), 1, "a chunk holding several keys resolves to the last one");
+
+  assert.equal(nextScroll(0, 50, 1, 24), 1);
+  assert.equal(nextScroll(0, 50, -1, 24), 0, "clamped at the top");
+  assert.equal(nextScroll(40, 50, "pageDown", 24), 50, "clamped at the bottom");
+  assert.equal(nextScroll(0, 50, "pageDown", 24), 16, "a page keeps the pinned rows in view");
+  assert.equal(nextScroll(9, 50, "top", 24), 0);
+  assert.equal(nextScroll(9, 50, "bottom", 24), 50);
+  assert.equal(nextScroll(0, 0, 1, 24), 0, "no scroll room means no movement");
 });
 
 test("dashboard store watcher wakes on a local filesystem event", () => {

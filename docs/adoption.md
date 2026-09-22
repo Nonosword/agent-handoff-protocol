@@ -79,6 +79,7 @@ its fixed identity and historical project-wide worklog path.
 ahp dashboard        # active Lanes expanded, done Lanes counted, archived hidden;
                      # baton, plan, verify, branch and short HEAD
 ahp dashboard -w     # redraws on local AHP state changes; fixed timestamps need no polling
+                     # header and footer stay pinned; ↑↓ PgUp/PgDn g/G scroll, q quits
 ahp dashboard --json # for scripts; exit 1 if a Lane cannot be read or verified
 ```
 

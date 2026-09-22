@@ -30,7 +30,9 @@ USAGE
 READ
   dashboard [-w]         every project and Lane: baton + worklog state. Runs from
                          anywhere. -w redraws immediately when the local AHP store
-                         changes; it does not poll or fetch.
+                         changes; it does not poll or fetch. In -w the header and
+                         footer stay pinned and ↑↓ PgUp/PgDn g/G scroll the rest;
+                         q or ctrl-c quits.
                          --json for scripts.
   status [--json]        selected Lane, baton holder, open intents, tree/gate state
   pickup [--full]        compact handoff, commit and open-intent summary; --full expands all

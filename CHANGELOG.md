@@ -7,6 +7,22 @@ version without a date is the working state on `main`.
 
 ## [Unreleased]
 
+## 0.8.6 — 2026-09-22
+
+- `ahp dashboard -w` paints into the alternate screen, which has no scrollback,
+  so any content past the terminal height became `… N more row(s); enlarge
+  terminal`. That made the watch view unusable once a store held more than a
+  screenful of projects.
+- The watch view now owns a viewport: the header and the footer stay pinned
+  while the project body scrolls with ↑/↓, PgUp/PgDn, g/G, j/k and space/b. The
+  footer shows the visible range when there is anything to scroll, and `q` quits
+  alongside ctrl-c. Mouse reporting is deliberately not enabled — it would take
+  terminal text selection away.
+- A resized terminal now repaints the frame from scratch instead of diffing
+  against rows the terminal has already discarded.
+- Project blocks are separated by a blank line and a rule rather than a blank
+  line, a rule and another blank, returning one row per project to content.
+
 ## 0.8.5 — 2026-09-22
 
 - A Lane whose history fails strict verification is no longer frozen. Both
@@ -26,6 +42,8 @@ version without a date is the working state on `main`.
 - Both refusals now name the operator routes out instead of only stating the
   problem. Agent-facing instructions say to stop and report such a refusal
   rather than invent or run either route.
+
+## 0.8.4 — 2026-09-18
 
 - Failed lock-token initialization no longer leaves an empty or partial lock
   that permanently blocks a Lane, Project registry, Lane registry, or installer

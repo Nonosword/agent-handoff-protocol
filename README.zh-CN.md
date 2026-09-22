@@ -148,7 +148,7 @@ hard cutoff 后合法的恢复路径。
 ```sh
 ahp dashboard       # active 展开、done 汇总、archived 隐藏；显示 baton、计划、
                     # 未完成 intent、verify、branch 和短 HEAD
-ahp dashboard -w    # 只有状态变化才重绘；ctrl-c 退出
+ahp dashboard -w    # 只有状态变化才重绘；行数超出屏幕时用 ↑↓ PgUp/PgDn g/G 滚动；q 或 ctrl-c 退出
 ahp dashboard --json
 ```
 

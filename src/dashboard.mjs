@@ -120,7 +120,11 @@ function laneFailsStrictVerification(lane) {
   return !!(lane.readError || lane.analysis?.validation.errors.length || lane.analysis?.validation.warnings.length);
 }
 
-function render(rows, home, { footer = "", version = null } = {}) {
+// `height` turns on the watch viewport: the header and footer are pinned and
+// only the project body scrolls, so a store with more projects than terminal
+// rows stays navigable instead of being cut off. Without it (the one-shot
+// `ahp dashboard`) the full text is returned and the terminal scrolls it.
+function render(rows, home, { footer = "", version = null, scroll = 0, height = Infinity } = {}) {
   const c = colors();
   const out = [""];
   const versionLabel = version ? ` v${version}` : "";
@@ -135,13 +139,13 @@ function render(rows, home, { footer = "", version = null } = {}) {
   const lifecycleSummary = `${activeLanes.length} active (${held} held · ${activeLanes.length - held} free) · ${doneLanes.length} done`;
   out.push(`  ${c.subtle(`${lifecycleSummary}${legacyLanes.length ? ` · ${legacyLanes.length} legacy` : ""}`)}`);
   out.push("");
+  const head = out.splice(0, out.length);
 
   let anyError = false;
   for (const [index, row] of rows.entries()) {
-    if (index > 0) {
-      out.push(`  ${c.rule("─".repeat(58))}`);
-      out.push("");
-    }
+    // One rule between blocks, with air above it only: the separator itself
+    // already reads as a break, and every saved row is a row of real content.
+    if (index > 0) out.push(`  ${c.rule("─".repeat(58))}`);
     const gitLabel = row.root
       ? `${c.subtle(row.root)}   ${c.subtle(row.head.branch ?? "?")}  ${c.subtle("@")} ${c.subtle(row.head.short ?? "?")}`
       : c.subtle("path unavailable");
@@ -197,8 +201,30 @@ function render(rows, home, { footer = "", version = null } = {}) {
   }
 
   if (!rows.length) out.push(`  ${c.subtle("nothing registered yet")}`);
-  if (footer) out.push(`  ${c.subtle(footer)}`);
-  return { text: out.join("\n") + "\n", anyError };
+
+  const window = windowBody(head, out, { height, scroll, footRows: footer ? 1 : 0 });
+  const lines = [...window.lines];
+  if (footer) {
+    const where = window.maxScroll > 0
+      ? `${window.scroll + 1}-${window.scroll + window.shown}/${out.length} · ↑↓ PgUp/PgDn g/G scroll · q quit · `
+      : "";
+    lines.push(`  ${c.subtle(where + footer)}`);
+  }
+  return { text: lines.join("\n") + "\n", anyError, scroll: window.scroll, maxScroll: window.maxScroll };
+}
+
+// Pin `head`, scroll `body`, and keep `footRows` clear for the footer. Without a
+// finite height (the one-shot dashboard) nothing is windowed and the terminal
+// does the scrolling itself.
+export function windowBody(head, body, { height = Infinity, scroll = 0, footRows = 0 } = {}) {
+  if (!Number.isFinite(height)) {
+    return { lines: [...head, ...body], scroll: 0, maxScroll: 0, shown: body.length };
+  }
+  const room = Math.max(1, height - head.length - footRows);
+  const maxScroll = Math.max(0, body.length - room);
+  const at = Math.min(Math.max(0, Math.trunc(scroll) || 0), maxScroll);
+  const view = body.slice(at, at + room);
+  return { lines: [...head, ...view], scroll: at, maxScroll, shown: view.length };
 }
 
 function fingerprint(home) {
@@ -333,6 +359,45 @@ function truncateLine(value, width) {
   return `${out}…\x1b[0m`;
 }
 
+// Raw-mode keystrokes → one scroll instruction, or null when the chunk holds
+// nothing we act on. A chunk may carry several keys (a held arrow, a paste);
+// the last recognised one wins, which is what a human pressing keys expects.
+export function scrollKeys(chunk) {
+  let move = null;
+  for (let i = 0; i < chunk.length; i += 1) {
+    const rest = chunk.slice(i);
+    if (rest.startsWith("\x1b[A")) { move = -1; i += 2; continue; }
+    if (rest.startsWith("\x1b[B")) { move = 1; i += 2; continue; }
+    if (rest.startsWith("\x1b[5~")) { move = "pageUp"; i += 3; continue; }
+    if (rest.startsWith("\x1b[6~")) { move = "pageDown"; i += 3; continue; }
+    if (rest.startsWith("\x1b[H") || rest.startsWith("\x1b[1~")) { move = "top"; i += 2; continue; }
+    if (rest.startsWith("\x1b[F") || rest.startsWith("\x1b[4~")) { move = "bottom"; i += 2; continue; }
+    switch (chunk[i]) {
+      case "k": move = -1; break;
+      case "j": move = 1; break;
+      case "b": move = "pageUp"; break;
+      case " ": case "f": move = "pageDown"; break;
+      case "g": move = "top"; break;
+      case "G": move = "bottom"; break;
+      case "q": return "quit";
+      default: break;
+    }
+  }
+  return move;
+}
+
+// A page keeps two rows of overlap so the reader never loses their place, and
+// leaves room for the pinned header/footer.
+export function nextScroll(scroll, maxScroll, move, height) {
+  const page = Math.max(1, (Number.isInteger(height) ? height : 20) - 8);
+  const to = move === "top" ? 0
+    : move === "bottom" ? maxScroll
+    : move === "pageUp" ? scroll - page
+    : move === "pageDown" ? scroll + page
+    : scroll + move;
+  return Math.min(Math.max(0, to), Math.max(0, maxScroll));
+}
+
 export function drawFrame(out, frame, previous = null) {
   const width = Number.isInteger(out.columns) ? Math.max(1, out.columns) : Infinity;
   const height = Number.isInteger(out.rows) ? Math.max(1, out.rows) : Infinity;
@@ -377,16 +442,28 @@ export async function dashboard({ home, version = null, json = false, watch = fa
   const input = process.stdin;
   const signal = changeSignal();
   let running = true;
+  let scroll = 0;
+  let scrollRequest = null;
   const stop = () => { running = false; signal.notify(); };
   const onInput = (data) => {
     // Raw mode prevents touchpad arrow-key escape sequences from echoing into
     // the dashboard. Honour Ctrl-C ourselves because raw mode disables the
     // terminal driver's normal SIGINT conversion.
-    if (Buffer.from(data).includes(3)) stop();
+    const buffer = Buffer.from(data);
+    if (buffer.includes(3)) return stop();
+    const move = scrollKeys(buffer.toString("latin1"));
+    if (move === "quit") return stop();
+    if (move !== null) { scrollRequest = move; signal.notify(); }
   };
+  // A resized terminal changes the window height, and the alternate screen is
+  // cleared by the terminal itself — repaint from scratch rather than diffing
+  // against rows that are no longer there.
+  let resized = false;
+  const onResize = () => { resized = true; signal.notify(); };
   const rawInput = input.isTTY && typeof input.setRawMode === "function";
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  out.on("resize", onResize);
   if (rawInput) {
     input.setRawMode(true);
     input.resume();
@@ -403,10 +480,24 @@ export async function dashboard({ home, version = null, json = false, watch = fa
     let watchError = null;
     closeWatcher = storeWatcher(home, () => signal.notify(), (message) => { watchError = message; });
     while (running) {
-      const frame = render(rows, home, { version, footer: `${watchError ? `watch: ${watchError} · ` : ""}updated at ${updatedAt}` });
+      if (resized) { resized = false; previousFrame = null; }
+      const height = Number.isInteger(out.rows) ? Math.max(1, out.rows) : Infinity;
+      const frame = render(rows, home, {
+        version,
+        scroll,
+        height,
+        footer: `${watchError ? `watch: ${watchError} · ` : ""}updated at ${updatedAt}`
+      });
+      scroll = frame.scroll;
       previousFrame = drawFrame(out, frame.text, previousFrame);
       await signal.wait();
       if (!running) break;
+
+      if (scrollRequest !== null) {
+        scroll = nextScroll(frame.scroll, frame.maxScroll, scrollRequest, height);
+        scrollRequest = null;
+        continue;
+      }
 
       const next = fingerprint(home);
       if (next === key) continue;
@@ -417,6 +508,7 @@ export async function dashboard({ home, version = null, json = false, watch = fa
   } finally {
     closeWatcher();
     out.write("\x1b[?25h\x1b[?1049l");
+    out.removeListener("resize", onResize);
     if (rawInput) {
       input.removeListener("data", onInput);
       input.setRawMode(false);

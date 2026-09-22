@@ -1,6 +1,6 @@
 {
   "name": "agent-handoff-protocol",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Continuity for rotated coding agents: an append-only central-store worklog that leaves tracked project files, the working tree, and Git history untouched.",
   "license": "MIT",
   "author": "Nonosword",

@@ -186,6 +186,7 @@ From **anywhere** — every project at a glance:
 ahp dashboard       # active Lanes expanded; done Lanes counted; archived hidden
                     # plus branch and short HEAD (no working-tree/log scan)
 ahp dashboard -w    # redraw on local AHP state changes; fixed timestamps need no polling
+                    # ↑↓ PgUp/PgDn g/G scroll when there are more rows than screen; q quits
 ahp dashboard --json
 ```
 
